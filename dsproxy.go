@@ -155,7 +155,8 @@ func HandleProxyRequest(w http.ResponseWriter, r *http.Request) {
 
 	// handle GET requests
 	if r.Method == http.MethodGet {
-		resp, err = http.Get(EndPoint.Upstream.GetValue() + r.URL.String())
+		client := http.Client{Timeout: time.Second * 5}
+		resp, err = client.Get(EndPoint.Upstream.GetValue() + r.URL.String())
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -197,7 +198,9 @@ func HandleProxyRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// print debug stats
-	fmt.Println("payload size:", n)
+	if false {
+		fmt.Println("payload size:", n)
+	}
 }
 
 // initialize program variables
