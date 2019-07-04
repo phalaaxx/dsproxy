@@ -5,9 +5,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
+	"text/template"
 	"time"
 )
 
@@ -92,7 +94,7 @@ var (
 )
 
 // HandleStats renders statistics page
-func HandleStatistics(w http.ResponseWriter, r *http.Request) {
+func HandleStatistics(w http.ResponseWriter, _ *http.Request) {
 	// update active requests stats
 	ActiveRequests.Increase()
 	defer ActiveRequests.Decrease()
@@ -100,15 +102,39 @@ func HandleStatistics(w http.ResponseWriter, r *http.Request) {
 	// update total requests stats
 	TotalRequests.Increase()
 
-	// render statistics information in plain text
-	fmt.Fprintf(w, "Dead Simple Proxy, Statistics page\n")
-	fmt.Fprintf(w, "----------------------------------\n\n")
+	// define statistics data structure
+	type StatsData struct {
+		ActiveRequests    int64
+		RequestsPerSecond int64
+		TotalRequests     int64
+		ServerUptime      string
+		ActiveEndpoint    string
+	}
 
-	fmt.Fprintf(w, "Active Requests    : %d\n", ActiveRequests.GetValue())
-	fmt.Fprintf(w, "Requests per Second: %d\n", RequestsPerSecond.GetValue())
-	fmt.Fprintf(w, "Total Requests     : %v\n", TotalRequests.GetValue())
-	fmt.Fprintf(w, "Server Uptime      : %v\n", time.Since(ServerStart).Round(time.Second).String())
-	fmt.Fprintf(w, "Active Endpoint    : %s\n", EndPoint.Upstream.GetValue())
+	// prepare statistics page template
+	TemplateStats := `Dead Simple Proxy, Statistics Page
+----------------------------------
+
+Active Requests     : {{ .ActiveRequests }}
+Requests per Second : {{ .RequestsPerSecond }}
+Total Requests      : {{ .TotalRequests }}
+Server Uptime       : {{ .ServerUptime }}
+Active Endpoint     : {{ .ActiveEndpoint }}
+`
+	// prepare statistics data
+	Data := StatsData{
+		ActiveRequests.GetValue(),
+		RequestsPerSecond.GetValue(),
+		TotalRequests.GetValue(),
+		time.Since(ServerStart).Round(time.Second).String(),
+		EndPoint.Upstream.GetValue(),
+	}
+
+	// render statistics information in plain text
+	Stats := template.Must(template.New("statistics").Parse(TemplateStats))
+	if err := Stats.Execute(w, Data); err != nil {
+		log.Print(err)
+	}
 
 	return
 }
@@ -132,7 +158,9 @@ func HandleSetEndpoint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	EndPoint.Upstream.SetValue(q[0])
-	fmt.Fprintf(w, "New endpoint: %s\n", q[0])
+	if _, err := fmt.Fprintf(w, "New endpoint: %s\n", q[0]); err != nil {
+		log.Println(err)
+	}
 }
 
 // HandleProxyRequest performs proxy operation
@@ -173,7 +201,12 @@ func HandleProxyRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// close body after job is finished
-	defer resp.Body.Close()
+	CloseBody := func() {
+		if err := resp.Body.Close(); err != nil {
+			log.Println(err)
+		}
+	}
+	defer CloseBody()
 
 	// copy over all headers from client to backend
 	for key, headers := range r.Header {
@@ -269,5 +302,7 @@ func main() {
 	// start requests per second statistics server
 	go RequestsPerSecondServer()
 	// bind to server port and listen for connections
-	http.ListenAndServe(BindAddress, mux)
+	if err := http.ListenAndServe(BindAddress, mux); err != nil {
+		log.Fatal(err)
+	}
 }
