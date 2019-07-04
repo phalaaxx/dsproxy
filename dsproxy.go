@@ -135,7 +135,7 @@ func HandleSetEndpoint(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "New endpoint: %s\n", q[0])
 }
 
-// HandleProxyRequest perfroms proxy operation
+// HandleProxyRequest performs proxy operation
 func HandleProxyRequest(w http.ResponseWriter, r *http.Request) {
 	// declare variables
 	var err error
