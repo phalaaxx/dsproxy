@@ -55,31 +55,17 @@ func NewMutexInt64() MutexInt64 {
 	}
 }
 
-// -- MutexString specifies a string protected with mutex
-type MutexString struct {
-	Value string
-	Mu    sync.RWMutex
+// EndPointData represents backend server data
+type EndPointData struct {
+	LocalPath string
+	Upstream  string
+	Headers   http.Header
 }
 
-// GetValue safely returns string value with read lock
-func (m *MutexString) GetValue() string {
-	m.Mu.RLock()
-	defer m.Mu.RUnlock()
-	return m.Value
-}
-
-// SetValue safely changes value of MutexString
-func (m *MutexString) SetValue(value string) {
-	m.Mu.Lock()
-	m.Value = value
-	m.Mu.Unlock()
-}
-
-// -- EndPoint variable that c
+// EndPoint mapping for local names to upstream addresses
 var EndPoint struct {
-	Upstream MutexString
-	Headers  http.Header
-	Mu       sync.RWMutex
+	Backend []EndPointData
+	Mu      sync.RWMutex
 }
 
 // global variables
@@ -102,13 +88,17 @@ func HandleStatistics(w http.ResponseWriter, _ *http.Request) {
 	// update total requests stats
 	TotalRequests.Increase()
 
+	// Lock EndPoint for reading
+	EndPoint.Mu.RLock()
+	defer EndPoint.Mu.RUnlock()
+
 	// define statistics data structure
 	type StatsData struct {
 		ActiveRequests    int64
 		RequestsPerSecond int64
 		TotalRequests     int64
 		ServerUptime      string
-		ActiveEndpoint    string
+		Backend           []EndPointData
 	}
 
 	// prepare statistics page template
@@ -119,7 +109,12 @@ Active Requests     : {{ .ActiveRequests }}
 Requests per Second : {{ .RequestsPerSecond }}
 Total Requests      : {{ .TotalRequests }}
 Server Uptime       : {{ .ServerUptime }}
-Active Endpoint     : {{ .ActiveEndpoint }}
+
+Active Endpoint:
+{{ range $i, $EndPoint := .Backend }}
+   Local Path: {{ $EndPoint.LocalPath }}
+   Upstream  : {{ $EndPoint.Upstream }}
+{{ end }}
 `
 	// prepare statistics data
 	Data := StatsData{
@@ -127,7 +122,7 @@ Active Endpoint     : {{ .ActiveEndpoint }}
 		RequestsPerSecond.GetValue(),
 		TotalRequests.GetValue(),
 		time.Since(ServerStart).Round(time.Second).String(),
-		EndPoint.Upstream.GetValue(),
+		EndPoint.Backend,
 	}
 
 	// render statistics information in plain text
@@ -148,8 +143,9 @@ func HandleSetEndpoint(w http.ResponseWriter, r *http.Request) {
 	// update total requests stats
 	TotalRequests.Increase()
 
-	q, ok := r.URL.Query()["q"]
-	if !ok || len(q) < 1 {
+	// get endpoint name
+	name, ok := r.URL.Query()["name"]
+	if !ok || len(name) < 1 {
 		http.Error(
 			w,
 			"Bad Request",
@@ -157,8 +153,48 @@ func HandleSetEndpoint(w http.ResponseWriter, r *http.Request) {
 		)
 		return
 	}
-	EndPoint.Upstream.SetValue(q[0])
-	if _, err := fmt.Fprintf(w, "New endpoint: %s\n", q[0]); err != nil {
+
+	// get endpoint address
+	address, ok := r.URL.Query()["address"]
+	if !ok || len(address) < 1 {
+		http.Error(
+			w,
+			"Bad Request",
+			http.StatusBadRequest,
+		)
+		return
+	}
+
+	// change existing endpoint
+	EndPoint.Mu.Lock()
+	defer EndPoint.Mu.Unlock()
+	for idx, endpoint := range EndPoint.Backend {
+		if strings.Compare(endpoint.LocalPath, name[0]) == 0 {
+			// lock EndPoint for writing
+			EndPoint.Backend[idx].Upstream = address[0]
+			_, err := fmt.Fprintf(
+				w,
+				"Updated endpoint for %s with backend %s\n",
+				name[0],
+				address[0],
+			)
+			if err != nil {
+				log.Println(err)
+			}
+			return
+		}
+	}
+	// add new endpoint to list
+	EndPoint.Backend = append(
+		EndPoint.Backend,
+		EndPointData{
+			name[0],
+			address[0],
+			make(http.Header),
+		},
+	)
+
+	if _, err := fmt.Fprintf(w, "New endpoint for %s: %s\n", name[0], address[0]); err != nil {
 		log.Println(err)
 	}
 }
@@ -181,10 +217,30 @@ func HandleProxyRequest(w http.ResponseWriter, r *http.Request) {
 	// update total requests stats
 	TotalRequests.Increase()
 
+	// lock endpoint for reading
+	EndPoint.Mu.RLock()
+	defer EndPoint.Mu.RUnlock()
+
+	// get backend name
+	var endpoint EndPointData
+	for _, ep := range EndPoint.Backend {
+		if strings.HasPrefix(r.URL.String(), fmt.Sprintf("/%s", ep.LocalPath)) {
+			endpoint = ep
+			break
+		}
+	}
+
+	// make sure endpoint exists
+	if len(endpoint.Upstream) == 0 {
+		return
+	}
+
+	UrlString := strings.TrimPrefix(r.URL.String(), fmt.Sprintf("/%s", endpoint.LocalPath))
+
 	// handle GET requests
 	if r.Method == http.MethodGet {
 		client := http.Client{Timeout: time.Second * 5}
-		resp, err = client.Get(EndPoint.Upstream.GetValue() + r.URL.String())
+		resp, err = client.Get(endpoint.Upstream + UrlString)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -193,7 +249,7 @@ func HandleProxyRequest(w http.ResponseWriter, r *http.Request) {
 
 	// handle POST requests
 	if r.Method == http.MethodPost {
-		resp, err = http.Post(EndPoint.Upstream.GetValue(), "application/xml", r.Body)
+		resp, err = http.Post(endpoint.Upstream, "application/xml", r.Body)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -215,8 +271,8 @@ func HandleProxyRequest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// append additional headers whenever necessary
-	if EndPoint.Headers != nil {
-		for key, headers := range EndPoint.Headers {
+	if endpoint.Headers != nil {
+		for key, headers := range endpoint.Headers {
 			for _, value := range headers {
 				w.Header().Set(key, value)
 			}
@@ -239,8 +295,13 @@ func HandleProxyRequest(w http.ResponseWriter, r *http.Request) {
 // initialize program variables
 func init() {
 	// initialize endpoint
-	EndPoint.Upstream.SetValue("https://www.google.com")
-	EndPoint.Headers = make(http.Header)
+	EndPoint.Backend = []EndPointData{
+		{
+			"default",
+			"https://www.google.com",
+			make(http.Header),
+		},
+	}
 
 	// initialize global variables
 	flag.StringVar(
