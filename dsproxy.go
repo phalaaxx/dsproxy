@@ -232,6 +232,10 @@ func HandleProxyRequest(w http.ResponseWriter, r *http.Request) {
 
 	// make sure endpoint exists
 	if len(endpoint.Upstream) == 0 {
+		if err := Render404(w, r.URL.String()); err != nil {
+			log.Println(err)
+		}
+		//http.Error(w, "Endpoint Not Found", http.StatusNotFound)
 		return
 	}
 
