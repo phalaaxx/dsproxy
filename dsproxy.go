@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"strings"
 	"sync"
-	"text/template"
 	"time"
 )
 
@@ -101,21 +100,6 @@ func HandleStatistics(w http.ResponseWriter, _ *http.Request) {
 		Backend           []EndPointData
 	}
 
-	// prepare statistics page template
-	TemplateStats := `Dead Simple Proxy, Statistics Page
-----------------------------------
-
-Active Requests     : {{ .ActiveRequests }}
-Requests per Second : {{ .RequestsPerSecond }}
-Total Requests      : {{ .TotalRequests }}
-Server Uptime       : {{ .ServerUptime }}
-
-Active Endpoint:
-{{ range $i, $EndPoint := .Backend }}
-   Local Path: {{ $EndPoint.LocalPath }}
-   Upstream  : {{ $EndPoint.Upstream }}
-{{ end }}
-`
 	// prepare statistics data
 	Data := StatsData{
 		ActiveRequests.GetValue(),
@@ -126,9 +110,8 @@ Active Endpoint:
 	}
 
 	// render statistics information in plain text
-	Stats := template.Must(template.New("statistics").Parse(TemplateStats))
-	if err := Stats.Execute(w, Data); err != nil {
-		log.Print(err)
+	if err := RenderStats(w, Data); err != nil {
+		log.Println(err)
 	}
 
 	return
