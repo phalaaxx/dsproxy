@@ -279,6 +279,37 @@ func HandleProxyRequest(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+/* HandleRemoveEndpoint deletes an endpoint from the endpoints list */
+func HandleRemoveEndpoint(w http.ResponseWriter, r *http.Request) {
+	// get endpoint name
+	name, ok := r.URL.Query()["name"]
+	if !ok || len(name) < 1 {
+		http.Error(
+			w,
+			"Bad Request",
+			http.StatusBadRequest,
+		)
+		return
+	}
+	// lock endpoint data structure for writing
+	EndPoint.Mu.Lock()
+	defer EndPoint.Mu.Unlock()
+	// remove endpoint configuration
+	for i := range EndPoint.Backend {
+		fmt.Println("DEBUG:", EndPoint.Backend[i].LocalPath)
+		if strings.Compare(name[0], EndPoint.Backend[i].LocalPath) == 0 {
+			EndPoint.Backend[i] = EndPoint.Backend[len(EndPoint.Backend)-1]
+			EndPoint.Backend = EndPoint.Backend[:len(EndPoint.Backend)-1]
+			http.Redirect(w, r, "/_control/stats", http.StatusFound)
+			return
+		}
+	}
+	// not found, render error
+	if err := Render404(w, name[0]); err != nil {
+		log.Println(err)
+	}
+}
+
 // initialize program variables
 func init() {
 	// initialize endpoint
@@ -342,6 +373,10 @@ func main() {
 	mux.HandleFunc(
 		"/_control/stats",
 		HandleStatistics,
+	)
+	mux.HandleFunc(
+		"/_control/remove",
+		HandleRemoveEndpoint,
 	)
 	mux.HandleFunc(
 		"/",

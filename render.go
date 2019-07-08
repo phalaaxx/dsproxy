@@ -90,7 +90,14 @@ const (
 					<td>{{$i}}</td>
 					<td>{{$EndPoint.LocalPath}}</td>
 					<td>{{$EndPoint.Upstream}}</td>
-					<td>-</td>
+					<td>
+						[<a
+							href="/_control/remove?name={{$EndPoint.LocalPath}}"
+							title="Remove endpoint {{$EndPoint.LocalPath}}"
+							onClick="return confirm(
+								'WARNING: Are you sure you want to remove endpoint {{$EndPoint.LocalPath}}?'
+							);">x</a>]
+					</td>
 				</tr>
 			{{end}}
 			</tbody>
