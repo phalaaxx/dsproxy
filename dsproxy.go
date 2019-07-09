@@ -54,17 +54,27 @@ func NewMutexInt64() MutexInt64 {
 	}
 }
 
-// EndPointData represents backend server data
-type EndPointData struct {
+// EndPointBackend represents backend server data
+type EndPointBackend struct {
 	LocalPath string
 	Upstream  string
 	Headers   http.Header
 }
 
-// EndPoint mapping for local names to upstream addresses
-var EndPoint struct {
-	Backend []EndPointData
+// EndPointData mapping for local names to upstream addresses
+type EndPointData struct {
+	Backend []EndPointBackend
 	Mu      sync.RWMutex
+}
+
+/* Get endpoint index from global variable */
+func (e EndPointData) Get(name string) int {
+	for idx := range e.Backend {
+		if strings.Compare(EndPoint.Backend[idx].LocalPath, name) == 0 {
+			return idx
+		}
+	}
+	return -1
 }
 
 // global variables
@@ -76,6 +86,7 @@ var (
 	ActiveRequests    MutexInt64
 	TotalRequests     MutexInt64
 	RequestsPerSecond MutexInt64
+	EndPoint          EndPointData
 )
 
 // HandleStats renders statistics page
@@ -97,7 +108,7 @@ func HandleStatistics(w http.ResponseWriter, _ *http.Request) {
 		RequestsPerSecond int64
 		TotalRequests     int64
 		ServerUptime      string
-		Backend           []EndPointData
+		Backend           []EndPointBackend
 	}
 
 	// prepare statistics data
@@ -170,7 +181,7 @@ func HandleSetEndpoint(w http.ResponseWriter, r *http.Request) {
 	// add new endpoint to list
 	EndPoint.Backend = append(
 		EndPoint.Backend,
-		EndPointData{
+		EndPointBackend{
 			name[0],
 			address[0],
 			make(http.Header),
@@ -205,7 +216,7 @@ func HandleProxyRequest(w http.ResponseWriter, r *http.Request) {
 	defer EndPoint.Mu.RUnlock()
 
 	// get backend name
-	var endpoint EndPointData
+	var endpoint EndPointBackend
 	for _, ep := range EndPoint.Backend {
 		if strings.HasPrefix(r.URL.String(), fmt.Sprintf("/%s", ep.LocalPath)) {
 			endpoint = ep
@@ -325,14 +336,40 @@ func HandleEditEndpoint(w http.ResponseWriter, r *http.Request) {
 	// lock endpoint data structure for writing
 	EndPoint.Mu.Lock()
 	defer EndPoint.Mu.Unlock()
-	// TODO: look up endpoint name
-	return
+	// look up endpoint index
+	idx := EndPoint.Get(name[0])
+	if idx == -1 {
+		if err := Render404(w, name[0]); err != nil {
+			log.Println(err)
+		}
+		return
+	}
+	// handle POST requests
+	if r.Method == http.MethodPost {
+		// parse http form data
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		// check address
+		address := r.FormValue("address")
+		if len(address) == 0 {
+			http.Error(w, "Bad Request", http.StatusBadRequest)
+		}
+		EndPoint.Backend[idx].Upstream = address
+		http.Redirect(w, r, "/_control/stats", http.StatusFound)
+		return
+	}
+	// render endpoint edit form
+	if err := RenderEdit(w, EndPoint.Backend[idx]); err != nil {
+		log.Println(err)
+	}
 }
 
 // initialize program variables
 func init() {
 	// initialize endpoint
-	EndPoint.Backend = []EndPointData{
+	EndPoint.Backend = []EndPointBackend{
 		{
 			"default",
 			"https://www.google.com",

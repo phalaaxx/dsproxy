@@ -112,12 +112,47 @@ const (
 	</body>
 </html>
 `
+	TemplateDataEdit = `<!DOCTYPE html>
+<html>
+	<head>
+		<title>Proxy Statistics</title>
+		<style>
+			.heading {
+				text-decoration: underline;
+			};
+			table {
+				border-collapse: collapse;
+				width: 100%;
+			}
+			th, td {
+				text-align: left;
+				padding: 0 20px 0 20px;
+			}
+			tr:nth-child(even) {
+				background-color: #f2f2f2;
+			}
+			thead {
+				font-weight: bold;
+				background-color: #ccc;
+			}
+		</style>
+	</head>
+	<body>
+		<h2 class=heading>Dead Simple Proxy</h2>
+		<h3>Edit endpoint {{.LocalPath}}</h3>
+		<form method="POST">
+			<input type="text" name="address" value="{{.Upstream}}">
+			<input type="submit" name="submit" value="Submit">
+		</form>
+	</body>
+</html>`
 )
 
 /* Global Variables */
 var (
 	Template404   *template.Template
 	TemplateStats *template.Template
+	TemplateEdit  *template.Template
 )
 
 /* Initialize global templates */
@@ -127,6 +162,9 @@ func init() {
 	)
 	TemplateStats = template.Must(
 		template.New("stats").Parse(TemplateDataStats),
+	)
+	TemplateEdit = template.Must(
+		template.New("edit").Parse(TemplateDataEdit),
 	)
 }
 
@@ -142,4 +180,9 @@ func Render404(w http.ResponseWriter, what string) error {
 /* RenderStats generates a statistics page */
 func RenderStats(w http.ResponseWriter, data interface{}) error {
 	return TemplateStats.Execute(w, data)
+}
+
+/* RenderEdit generates endpiont edit form */
+func RenderEdit(w http.ResponseWriter, endpoint EndPointBackend) error {
+	return TemplateEdit.Execute(w, endpoint)
 }
