@@ -91,12 +91,14 @@ const (
 					<td>{{$EndPoint.LocalPath}}</td>
 					<td>{{$EndPoint.Upstream}}</td>
 					<td>
-						[<a
+						<a
 							href="/_control/remove?name={{$EndPoint.LocalPath}}"
 							title="Remove endpoint {{$EndPoint.LocalPath}}"
 							onClick="return confirm(
 								'WARNING: Are you sure you want to remove endpoint {{$EndPoint.LocalPath}}?'
-							);">x</a>]
+							);">
+							<img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABHNCSVQICAgIfAhkiAAAAAlwSFlzAAALEwAACxMBAJqcGAAAAOFJREFUOI2Vkk0OgjAQhT/YiBdBN4Z4BC+jB1IDC89ijIfAwB64Am6Ki07NpLaok7yknbw3//BpW6ACWuApaIASKAL8ty2BCzDNwEjwLCS+fxFr3PwgOnMn8EUd0Kt/qXvWpFzQBfwrYFDtFClwCMyjBXaSsZd3CySKkwB7R/ZLzYWUq/daZXd4gF1TqF8njIknYEwD5f9tzUz2tSBWRQ12HTHxIIgFOYI9T6MCrAJEF0T7DbBxbVQeOTQw33/Sc8iw5/nrKV+BhT/MTCoxM0IjmT/E2grgjD2SUVDLwDY++QUdKpC+p87z5AAAAABJRU5ErkJggg==">
+						</a>
 					</td>
 				</tr>
 			{{end}}
