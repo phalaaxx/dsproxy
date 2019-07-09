@@ -92,6 +92,11 @@ const (
 					<td>{{$EndPoint.Upstream}}</td>
 					<td>
 						<a
+							href="/_control/edit?name={{$EndPoint.LocalPath}}"
+							title="Change endpoint data {{$EndPoint.LocalPath}}">
+							<img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABHNCSVQICAgIfAhkiAAAAAlwSFlzAAALEwAACxMBAJqcGAAAAGpJREFUOI3FkUsOgCAMBQe9GDezR8OT6cJqDFqgdeFLuuAz0xTAF9EKRYBN65JMQdlySmYHVIAEZF1nIPUEoheLIVl78GPm21m9Z8KWxAWbkvoXhOOFQ2l17o7wH8xXuCUYgi3BMPwmcME7KuNKVCZRuEcAAAAASUVORK5CYII=">
+						</a>
+						<a
 							href="/_control/remove?name={{$EndPoint.LocalPath}}"
 							title="Remove endpoint {{$EndPoint.LocalPath}}"
 							onClick="return confirm(

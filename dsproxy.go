@@ -310,6 +310,25 @@ func HandleRemoveEndpoint(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+/* HandleEditEndpoint renders a form to edit endpoint parameters */
+func HandleEditEndpoint(w http.ResponseWriter, r *http.Request) {
+	// get endpoint name
+	name, ok := r.URL.Query()["name"]
+	if !ok || len(name) < 1 {
+		http.Error(
+			w,
+			"Bad Request",
+			http.StatusBadRequest,
+		)
+		return
+	}
+	// lock endpoint data structure for writing
+	EndPoint.Mu.Lock()
+	defer EndPoint.Mu.Unlock()
+	// TODO: look up endpoint name
+	return
+}
+
 // initialize program variables
 func init() {
 	// initialize endpoint
@@ -377,6 +396,10 @@ func main() {
 	mux.HandleFunc(
 		"/_control/remove",
 		HandleRemoveEndpoint,
+	)
+	mux.HandleFunc(
+		"/_control/edit",
+		HandleEditEndpoint,
 	)
 	mux.HandleFunc(
 		"/",
