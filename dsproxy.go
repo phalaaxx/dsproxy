@@ -366,6 +366,54 @@ func HandleEditEndpoint(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+/* HandleNewEndpoint renders a form to edit endpoint parameters */
+func HandleNewEndpoint(w http.ResponseWriter, r *http.Request) {
+	// lock endpoint data structure for writing
+	EndPoint.Mu.Lock()
+	defer EndPoint.Mu.Unlock()
+	// handle POST requests
+	if r.Method == http.MethodPost {
+		// parse http form data
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		// check endpoint name
+		endpoint := r.FormValue("endpoint")
+		if len(endpoint) == 0 {
+			http.Error(w, "Bad Request", http.StatusBadRequest)
+			return
+		}
+		// check address
+		address := r.FormValue("address")
+		if len(address) == 0 {
+			http.Error(w, "Bad Request", http.StatusBadRequest)
+			return
+		}
+		// look up endpoint index
+		idx := EndPoint.Get(endpoint)
+		if idx != -1 {
+			http.Error(w, "Endpoint Exists", http.StatusConflict)
+			return
+		}
+		// add new endpoint to list
+		EndPoint.Backend = append(
+			EndPoint.Backend,
+			EndPointBackend{
+				endpoint,
+				address,
+				make(http.Header),
+			},
+		)
+		http.Redirect(w, r, "/_control/stats", http.StatusFound)
+		return
+	}
+	// render endpoint edit form
+	if err := RenderNew(w); err != nil {
+		log.Println(err)
+	}
+}
+
 // initialize program variables
 func init() {
 	// initialize endpoint
@@ -437,6 +485,10 @@ func main() {
 	mux.HandleFunc(
 		"/_control/edit",
 		HandleEditEndpoint,
+	)
+	mux.HandleFunc(
+		"/_control/new",
+		HandleNewEndpoint,
 	)
 	mux.HandleFunc(
 		"/",

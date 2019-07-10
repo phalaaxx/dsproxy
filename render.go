@@ -74,7 +74,11 @@ const (
 				</tr>
 			</tbody>
 		</table>
-		<h3>Configured Endpoints</h3>
+		<h3>
+			[<a href="/_control/new" title="Add new endpoint"><img
+				src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABHNCSVQICAgIfAhkiAAAAAlwSFlzAAALEwAACxMBAJqcGAAAAC1JREFUOI1jZMAN/qPxGbEpYsJjAFFg1ABIyKKHNn1dMPAGYE1dUDCaEullAAAi0gMdELO4MAAAAABJRU5ErkJggg=="></a>]
+			Configured Endpoints
+		</h3>
 		<table>
 			<thead>
 				<tr>
@@ -146,6 +150,36 @@ const (
 		</form>
 	</body>
 </html>`
+	TemplateDataNew = `<!DOCTYPE html>
+<html>
+	<head>
+		<title>Proxy Statistics</title>
+		<style>
+			.heading {
+				text-decoration: underline;
+			};
+		</style>
+	</head>
+	<body>
+		<h2 class=heading>Dead Simple Proxy</h2>
+		<h3>Create new endpoint</h3>
+		<form method="POST">
+			<p>
+				Proxy local path:
+				<br/>
+				<input type="text" name="endpoint" placeholder="Proxy Local Path">
+			</p>
+			<p>
+				Backend server address:
+				<br/>
+				<input type="text" name="address" placeholder="Upstream Address">
+			</p>
+			<p>
+				<input type="submit" name="submit" value="Submit">
+			</p>
+		</form>
+	</body>
+</html>`
 )
 
 /* Global Variables */
@@ -153,6 +187,7 @@ var (
 	Template404   *template.Template
 	TemplateStats *template.Template
 	TemplateEdit  *template.Template
+	TemplateNew   *template.Template
 )
 
 /* Initialize global templates */
@@ -165,6 +200,9 @@ func init() {
 	)
 	TemplateEdit = template.Must(
 		template.New("edit").Parse(TemplateDataEdit),
+	)
+	TemplateNew = template.Must(
+		template.New("new").Parse(TemplateDataNew),
 	)
 }
 
@@ -185,4 +223,9 @@ func RenderStats(w http.ResponseWriter, data interface{}) error {
 /* RenderEdit generates endpiont edit form */
 func RenderEdit(w http.ResponseWriter, endpoint EndPointBackend) error {
 	return TemplateEdit.Execute(w, endpoint)
+}
+
+/* RenderNew generates a new endpoint form view */
+func RenderNew(w http.ResponseWriter) error {
+	return TemplateNew.Execute(w, nil)
 }
