@@ -128,71 +128,6 @@ func HandleStatistics(w http.ResponseWriter, _ *http.Request) {
 	return
 }
 
-// HandleSetEndpoint changes or sets currently active endpoint
-func HandleSetEndpoint(w http.ResponseWriter, r *http.Request) {
-	// update active requests stats
-	ActiveRequests.Increase()
-	defer ActiveRequests.Decrease()
-
-	// update total requests stats
-	TotalRequests.Increase()
-
-	// get endpoint name
-	name, ok := r.URL.Query()["name"]
-	if !ok || len(name) < 1 {
-		http.Error(
-			w,
-			"Bad Request",
-			http.StatusBadRequest,
-		)
-		return
-	}
-
-	// get endpoint address
-	address, ok := r.URL.Query()["address"]
-	if !ok || len(address) < 1 {
-		http.Error(
-			w,
-			"Bad Request",
-			http.StatusBadRequest,
-		)
-		return
-	}
-
-	// change existing endpoint
-	EndPoint.Mu.Lock()
-	defer EndPoint.Mu.Unlock()
-	for idx, endpoint := range EndPoint.Backend {
-		if strings.Compare(endpoint.LocalPath, name[0]) == 0 {
-			// lock EndPoint for writing
-			EndPoint.Backend[idx].Upstream = address[0]
-			_, err := fmt.Fprintf(
-				w,
-				"Updated endpoint for %s with backend %s\n",
-				name[0],
-				address[0],
-			)
-			if err != nil {
-				log.Println(err)
-			}
-			return
-		}
-	}
-	// add new endpoint to list
-	EndPoint.Backend = append(
-		EndPoint.Backend,
-		EndPointBackend{
-			name[0],
-			address[0],
-			make(http.Header),
-		},
-	)
-
-	if _, err := fmt.Fprintf(w, "New endpoint for %s: %s\n", name[0], address[0]); err != nil {
-		log.Println(err)
-	}
-}
-
 // HandleProxyRequest performs proxy operation
 func HandleProxyRequest(w http.ResponseWriter, r *http.Request) {
 	// declare variables
@@ -470,10 +405,6 @@ func main() {
 	flag.Parse()
 	mux := http.NewServeMux()
 	// attach server handlers
-	mux.HandleFunc(
-		"/_control/endpoint",
-		HandleSetEndpoint,
-	)
 	mux.HandleFunc(
 		"/_control/stats",
 		HandleStatistics,
