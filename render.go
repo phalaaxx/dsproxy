@@ -124,21 +124,6 @@ const (
 			.heading {
 				text-decoration: underline;
 			};
-			table {
-				border-collapse: collapse;
-				width: 100%;
-			}
-			th, td {
-				text-align: left;
-				padding: 0 20px 0 20px;
-			}
-			tr:nth-child(even) {
-				background-color: #f2f2f2;
-			}
-			thead {
-				font-weight: bold;
-				background-color: #ccc;
-			}
 		</style>
 	</head>
 	<body>
