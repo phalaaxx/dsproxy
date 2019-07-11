@@ -2,11 +2,13 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -83,6 +85,8 @@ var (
 	ContentType       string
 	BindAddress       string
 	RequestTimeout    int
+	ConfigurationFile string
+	SaveConfiguration bool
 	ActiveRequests    MutexInt64
 	TotalRequests     MutexInt64
 	RequestsPerSecond MutexInt64
@@ -225,6 +229,52 @@ func HandleProxyRequest(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+/* SaveConfiguration stores endpoints configuration to a JSON file */
+func SaveConfigurationFile(name string, data []EndPointBackend) error {
+	if !SaveConfiguration {
+		return nil
+	}
+	// create configuration file
+	file, err := os.Create(name)
+	if err != nil {
+		return err
+	}
+	CloseFile := func() {
+		if err := file.Close(); err != nil {
+			log.Println(err)
+		}
+	}
+	defer CloseFile()
+	encoder := json.NewEncoder(file)
+	// save configuration
+	if err = encoder.Encode(data); err != nil {
+		return err
+	}
+	return nil
+}
+
+/* LoacConfiguration reads a JSON file containing backend endpoints */
+func LoadConfigurationFile(name string) ([]EndPointBackend, error) {
+	// open configuration file for reading
+	file, err := os.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	CloseFile := func() {
+		if err := file.Close(); err != nil {
+			log.Println(err)
+		}
+	}
+	defer CloseFile()
+	// load configuration
+	decoder := json.NewDecoder(file)
+	var result []EndPointBackend
+	if err := decoder.Decode(&result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 /* HandleRemoveEndpoint deletes an endpoint from the endpoints list */
 func HandleRemoveEndpoint(w http.ResponseWriter, r *http.Request) {
 	// get endpoint name
@@ -246,6 +296,11 @@ func HandleRemoveEndpoint(w http.ResponseWriter, r *http.Request) {
 		if strings.Compare(name[0], EndPoint.Backend[i].LocalPath) == 0 {
 			EndPoint.Backend[i] = EndPoint.Backend[len(EndPoint.Backend)-1]
 			EndPoint.Backend = EndPoint.Backend[:len(EndPoint.Backend)-1]
+			// store configuration to persistent storage
+			if err := SaveConfigurationFile(ConfigurationFile, EndPoint.Backend); err != nil {
+				log.Println(err)
+			}
+			// redirect to _control view
 			http.Redirect(w, r, "/_control/", http.StatusFound)
 			return
 		}
@@ -292,6 +347,11 @@ func HandleEditEndpoint(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Bad Request", http.StatusBadRequest)
 		}
 		EndPoint.Backend[idx].Upstream = address
+		// store configuration to persistent storage
+		if err := SaveConfigurationFile(ConfigurationFile, EndPoint.Backend); err != nil {
+			log.Println(err)
+		}
+		// redirect to _control view
 		http.Redirect(w, r, "/_control/", http.StatusFound)
 		return
 	}
@@ -340,6 +400,10 @@ func HandleNewEndpoint(w http.ResponseWriter, r *http.Request) {
 				make(http.Header),
 			},
 		)
+		// store configuration to persistent storage
+		if err := SaveConfigurationFile(ConfigurationFile, EndPoint.Backend); err != nil {
+			log.Println(err)
+		}
 		http.Redirect(w, r, "/_control/", http.StatusFound)
 		return
 	}
@@ -351,15 +415,6 @@ func HandleNewEndpoint(w http.ResponseWriter, r *http.Request) {
 
 // initialize program variables
 func init() {
-	// initialize endpoint
-	EndPoint.Backend = []EndPointBackend{
-		{
-			"default",
-			"https://www.google.com",
-			make(http.Header),
-		},
-	}
-
 	// initialize global variables
 	flag.StringVar(
 		&ContentType,
@@ -378,6 +433,18 @@ func init() {
 		"request-timeout",
 		3000,
 		"Request timeout in milliseconds",
+	)
+	flag.StringVar(
+		&ConfigurationFile,
+		"config",
+		"dsproxy.json",
+		"Endpoints configuration file",
+	)
+	flag.BoolVar(
+		&SaveConfiguration,
+		"save",
+		false,
+		"Save configuration to file when changed",
 	)
 
 	// initialize server start time
@@ -403,8 +470,13 @@ func RequestsPerSecondServer() {
 // main program
 func main() {
 	flag.Parse()
+	// initialize endpoint
+	var err error
+	if EndPoint.Backend, err = LoadConfigurationFile(ConfigurationFile); err != nil {
+		log.Println(err)
+	}
+	// http muxer and handlers
 	mux := http.NewServeMux()
-	// attach server handlers
 	mux.HandleFunc(
 		"/_control/",
 		HandleStatistics,
