@@ -130,8 +130,13 @@ const (
 		<h2 class=heading>Dead Simple Proxy</h2>
 		<h3>Edit endpoint {{.LocalPath}}</h3>
 		<form method="POST">
-			<input type="text" name="address" value="{{.Upstream}}">
-			<input type="submit" name="submit" value="Submit">
+			<p>
+				<input type="text" name="address" value="{{.Upstream}}" autofocus>
+			</p>
+			<p>
+				<input type="submit" name="submit" value="Submit">
+				<input type="button" name="cancel" value="Cancel" onClick="window.location='/_control/';">
+			</p>
 		</form>
 	</body>
 </html>`
@@ -152,7 +157,7 @@ const (
 			<p>
 				Proxy local path:
 				<br/>
-				<input type="text" name="endpoint" placeholder="Proxy Local Path">
+				<input type="text" name="endpoint" placeholder="Proxy Local Path" autofocus>
 			</p>
 			<p>
 				Backend server address:
@@ -161,6 +166,7 @@ const (
 			</p>
 			<p>
 				<input type="submit" name="submit" value="Submit">
+				<input type="button" name="cancel" value="Cancel" onClick="window.location='/_control/';">
 			</p>
 		</form>
 	</body>
