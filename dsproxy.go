@@ -246,7 +246,7 @@ func HandleRemoveEndpoint(w http.ResponseWriter, r *http.Request) {
 		if strings.Compare(name[0], EndPoint.Backend[i].LocalPath) == 0 {
 			EndPoint.Backend[i] = EndPoint.Backend[len(EndPoint.Backend)-1]
 			EndPoint.Backend = EndPoint.Backend[:len(EndPoint.Backend)-1]
-			http.Redirect(w, r, "/_control/stats", http.StatusFound)
+			http.Redirect(w, r, "/_control/", http.StatusFound)
 			return
 		}
 	}
@@ -292,7 +292,7 @@ func HandleEditEndpoint(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Bad Request", http.StatusBadRequest)
 		}
 		EndPoint.Backend[idx].Upstream = address
-		http.Redirect(w, r, "/_control/stats", http.StatusFound)
+		http.Redirect(w, r, "/_control/", http.StatusFound)
 		return
 	}
 	// render endpoint edit form
@@ -340,7 +340,7 @@ func HandleNewEndpoint(w http.ResponseWriter, r *http.Request) {
 				make(http.Header),
 			},
 		)
-		http.Redirect(w, r, "/_control/stats", http.StatusFound)
+		http.Redirect(w, r, "/_control/", http.StatusFound)
 		return
 	}
 	// render endpoint edit form
@@ -406,7 +406,7 @@ func main() {
 	mux := http.NewServeMux()
 	// attach server handlers
 	mux.HandleFunc(
-		"/_control/stats",
+		"/_control/",
 		HandleStatistics,
 	)
 	mux.HandleFunc(
