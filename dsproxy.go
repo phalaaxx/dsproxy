@@ -248,7 +248,7 @@ func SaveConfigurationFile(name string, data []EndPointBackend) error {
 	return nil
 }
 
-/* LoacConfiguration reads a JSON file containing backend endpoints */
+/* LoadConfiguration reads a JSON file containing backend endpoints */
 func LoadConfigurationFile(name string) ([]EndPointBackend, error) {
 	// open configuration file for reading
 	file, err := os.Open(name)
@@ -469,7 +469,7 @@ func main() {
 	if EndPoint.Backend, err = LoadConfigurationFile(ConfigurationFile); err != nil {
 		log.Println(err)
 	}
-	// http muxer and handlers
+	// http mux and handlers
 	mux := http.NewServeMux()
 	mux.HandleFunc(
 		"/_control/",
