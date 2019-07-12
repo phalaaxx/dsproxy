@@ -217,15 +217,10 @@ func HandleProxyRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// copy data from upstream to client
-	n, err := io.Copy(w, resp.Body)
+	_, err = io.Copy(w, resp.Body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
-	}
-
-	// print debug stats
-	if false {
-		fmt.Println("payload size:", n)
 	}
 }
 
@@ -292,7 +287,6 @@ func HandleRemoveEndpoint(w http.ResponseWriter, r *http.Request) {
 	defer EndPoint.Mu.Unlock()
 	// remove endpoint configuration
 	for i := range EndPoint.Backend {
-		fmt.Println("DEBUG:", EndPoint.Backend[i].LocalPath)
 		if strings.Compare(name[0], EndPoint.Backend[i].LocalPath) == 0 {
 			EndPoint.Backend[i] = EndPoint.Backend[len(EndPoint.Backend)-1]
 			EndPoint.Backend = EndPoint.Backend[:len(EndPoint.Backend)-1]
