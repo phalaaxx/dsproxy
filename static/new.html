@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<title>Proxy Statistics</title>
+		<style>
+			.heading {
+				text-decoration: underline;
+			};
+		</style>
+	</head>
+	<body>
+		<h2 class=heading>Dead Simple Proxy</h2>
+		<h3>Create new endpoint</h3>
+		<form method="POST">
+			<p>
+				Proxy local path:
+				<br/>
+				<input type="text" name="endpoint" placeholder="Proxy Local Path" autofocus>
+			</p>
+			<p>
+				Backend server address:
+				<br/>
+				<input type="text" name="address" placeholder="Upstream Address">
+			</p>
+			<p>
+				<input type="submit" name="submit" value="Submit">
+				<input type="button" name="cancel" value="Cancel" onClick="window.location='/_control/';">
+			</p>
+		</form>
+	</body>
+</html>
