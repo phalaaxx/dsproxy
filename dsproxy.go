@@ -2,6 +2,7 @@
 package main
 
 import (
+	_ "embed"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -11,7 +12,31 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"text/template"
 	"time"
+)
+
+/* Global Constants */
+var (
+	//go:embed static/404.html
+	TemplateData404 string
+
+	//go:embed static/stats.html
+	TemplateDataStats string
+
+	//go:embed static/edit.html
+	TemplateDataEdit string
+
+	//go:embed static/new.html
+	TemplateDataNew string
+)
+
+/* Global Variables */
+var (
+	Template404   *template.Template
+	TemplateStats *template.Template
+	TemplateEdit  *template.Template
+	TemplateNew   *template.Template
 )
 
 // -- MutexInt64 specifies an integer with mutex struct
@@ -407,9 +432,33 @@ func HandleNewEndpoint(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// initialize program variables
+/* Render404 generates a 404 Not Found page */
+func Render404(w http.ResponseWriter, what string) error {
+	w.WriteHeader(http.StatusNotFound)
+	if err := Template404.Execute(w, what); err != nil {
+		return err
+	}
+	return nil
+}
+
+/* RenderStats generates a statistics page */
+func RenderStats(w http.ResponseWriter, data interface{}) error {
+	return TemplateStats.Execute(w, data)
+}
+
+/* RenderEdit generates endpiont edit form */
+func RenderEdit(w http.ResponseWriter, endpoint EndPointBackend) error {
+	return TemplateEdit.Execute(w, endpoint)
+}
+
+/* RenderNew generates a new endpoint form view */
+func RenderNew(w http.ResponseWriter) error {
+	return TemplateNew.Execute(w, nil)
+}
+
+/* initialize program variables */
 func init() {
-	// initialize global variables
+	/* initialize global variables */
 	flag.StringVar(
 		&ContentType,
 		"content-type",
@@ -441,13 +490,27 @@ func init() {
 		"Save configuration to file when changed",
 	)
 
-	// initialize server start time
+	/* initialize server start time */
 	ServerStart = time.Now()
 
-	// initialize global counters
+	/* initialize global counters */
 	ActiveRequests = NewMutexInt64()
 	TotalRequests = NewMutexInt64()
 	RequestsPerSecond = NewMutexInt64()
+
+	/* initialize global templates */
+	Template404 = template.Must(
+		template.New("404").Parse(TemplateData404),
+	)
+	TemplateStats = template.Must(
+		template.New("stats").Parse(TemplateDataStats),
+	)
+	TemplateEdit = template.Must(
+		template.New("edit").Parse(TemplateDataEdit),
+	)
+	TemplateNew = template.Must(
+		template.New("new").Parse(TemplateDataNew),
+	)
 }
 
 // update requests per second once every second
