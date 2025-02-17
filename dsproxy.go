@@ -2,7 +2,7 @@
 package main
 
 import (
-	_ "embed"
+	"embed"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -18,17 +18,8 @@ import (
 
 /* Global Constants */
 var (
-	//go:embed static/404.html
-	TemplateData404 string
-
-	//go:embed static/stats.html
-	TemplateDataStats string
-
-	//go:embed static/edit.html
-	TemplateDataEdit string
-
-	//go:embed static/new.html
-	TemplateDataNew string
+	//go:embed static/*
+	static embed.FS
 )
 
 /* Global Variables */
@@ -456,6 +447,19 @@ func RenderNew(w http.ResponseWriter) error {
 	return TemplateNew.Execute(w, nil)
 }
 
+/* loadTemplate reads and parses named template from embeded static storage */
+func loadTemplate(static embed.FS, name string) *template.Template {
+	/* read file data */
+	data, err := static.ReadFile(name)
+	if err != nil {
+		panic(err)
+	}
+	/* parse and return template */
+	return template.Must(
+		template.New(name).Parse(string(data)),
+	)
+}
+
 /* initialize program variables */
 func init() {
 	/* initialize global variables */
@@ -499,18 +503,10 @@ func init() {
 	RequestsPerSecond = NewMutexInt64()
 
 	/* initialize global templates */
-	Template404 = template.Must(
-		template.New("404").Parse(TemplateData404),
-	)
-	TemplateStats = template.Must(
-		template.New("stats").Parse(TemplateDataStats),
-	)
-	TemplateEdit = template.Must(
-		template.New("edit").Parse(TemplateDataEdit),
-	)
-	TemplateNew = template.Must(
-		template.New("new").Parse(TemplateDataNew),
-	)
+	Template404 = loadTemplate(static, "static/404.html")
+	TemplateStats = loadTemplate(static, "static/stats.html")
+	TemplateEdit = loadTemplate(static, "static/edit.html")
+	TemplateNew = loadTemplate(static, "static/new.html")
 }
 
 // update requests per second once every second
