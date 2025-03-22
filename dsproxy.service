@@ -1,0 +1,18 @@
+[Unit]
+Description=Dead Simple Proxy
+After=network.target auditd.service
+
+[Service]
+WorkingDirectory=/var/lib/dsproxy
+User=dsproxy
+ExecStart=/usr/sbin/dsproxy \
+    -server \
+    -bind-address        10.20.30.40:443 \
+    -maintenance         /var/lib/dsproxy/maintenance.html
+    #-ssl-certificate     /var/lib/dsproxy/fullchain.pem
+    #-ssl-certificate-key /var/lib/dsproxy/privkey.pem
+KillMode=process
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
