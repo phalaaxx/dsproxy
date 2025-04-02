@@ -326,15 +326,29 @@ func (b *BackendData) Add(host string, location string, upstreamAddress string) 
 }
 
 /* SetActive sets endpoint Active status, returns true on success */
-func (b *BackendData) SetActive(host string, location string, active bool) bool {
+func (b *BackendData) SetActive(host string, location string, active bool, autoCreate bool) bool {
 	b.mu.Lock()
-	defer b.mu.Unlock()
+	/* look for existing endpoint and set its status */
 	for idx := 0; idx < len(b.Backend[host]); idx++ {
 		if b.Backend[host][idx].Location == location {
 			b.Backend[host][idx].Active = active
+			b.mu.Unlock()
 			return true
 		}
 	}
+	b.mu.Unlock()
+	/* create endpoint if it does not exists and autoCreate is true */
+	if autoCreate {
+		fmt.Printf("auto-creating: %s/%s\n", host, location)
+		if idx := b.Find(host, "/"); idx != -1 {
+			/* attempt to auto-create the new endpoint */
+			if err := b.Add(host, location, fmt.Sprintf("%s/%s", b.Backend[host][idx].Upstream, location)); err != nil {
+				return false
+			}
+			return b.SetActive(host, location, active, false)
+		}
+	}
+	/* endpoint does not exist, return false */
 	return false
 }
 
@@ -561,6 +575,7 @@ type RpcMessage struct {
 	Upstream  string     `json:"upstream"`
 	Payload   string     `json:"payload"`
 	Active    bool       `json:"active"`
+	Force     bool       `json:"force"`
 	Endpoints BackendMap `json:"endpoints"`
 	Whitelist []string   `json:"whitelist"`
 }
@@ -606,7 +621,7 @@ func (r *RpcBroker) Status(arg *int, message *RpcMessage) error {
 
 /* SetActive activates or deactivates a proxy endpoint */
 func (r *RpcBroker) SetActive(msg *RpcMessage, reply *int) error {
-	if r.endPoint.SetActive(msg.Host, msg.Location, msg.Active) {
+	if r.endPoint.SetActive(msg.Host, msg.Location, msg.Active, msg.Force) {
 		if err := r.endPoint.SaveConfiguration(r.configFile); err != nil {
 			return err
 		}
@@ -890,6 +905,7 @@ func main() {
 	maintenancePage := flag.String("maintenance", "", "Path to maintenance html page")
 	configurationFile := flag.String("config", "dsproxy.json", "Endpoints configuration file")
 	cmdServer := flag.Bool("server", false, "Start dsproxy server")
+	cmdAutoCreate := flag.Bool("auto-create", false, "Auto create endpoint on deactivate if possible")
 	cmdActivate := flag.Bool("activate", false, "Set backend to active state")
 	cmdDeactivate := flag.Bool("deactivate", false, "Set backend to maintenance state")
 	cmdAdd := flag.Bool("add", false, "Create new endpoint")
@@ -1027,6 +1043,7 @@ func main() {
 			Host:     *cmdHost,
 			Location: *cmdLocation,
 			Active:   true,
+			Force:    *cmdAutoCreate,
 		}
 		if err := RpcClient(*rpcSocket).Call("RpcBroker.SetActive", &req, &reply); err != nil {
 			log.Fatal(err)
@@ -1037,6 +1054,7 @@ func main() {
 			Host:     *cmdHost,
 			Location: *cmdLocation,
 			Active:   false,
+			Force:    *cmdAutoCreate,
 		}
 		if err := RpcClient(*rpcSocket).Call("RpcBroker.SetActive", &req, &reply); err != nil {
 			log.Fatal(err)
