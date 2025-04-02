@@ -114,7 +114,8 @@ func NewMutexUInt64() MutexUInt64 {
 type Backend struct {
 	ID       int         `json:"id"`
 	Location string      `json:"location"`
-	Upstream string      `json:"upstream_address"`
+	Address  string      `json:"address"`
+	Target   string      `json:"target"`
 	Counter  MutexUInt64 `json:"counter"`
 	Active   bool        `json:"active"`
 	Headers  http.Header `json:"headers"`
@@ -255,15 +256,36 @@ func (b *BackendData) SetLocation(host string, location string, newPath string) 
 	return fmt.Errorf("endpoint %s was not found for host %s.", location, host)
 }
 
-/* SetUpstream updates the upstream for the specified backend with a new one */
-func (b *BackendData) SetUpstream(host string, location string, newUpstream string) error {
+/* SetAddress updates the specified IP address with a new one */
+func (b *BackendData) SetAddress(host string, location string, newAddress string) error {
+	/* check for valid address */
+	if len(newAddress) != 0 && newAddress != "-" {
+		if _, _, err := net.SplitHostPort(newAddress); err != nil {
+			return fmt.Errorf("invalid address:port pair: %s", newAddress)
+		}
+	}
 	/* lock for update */
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	/* perform the update */
 	for idx := 0; idx < len(b.Backend[host]); idx++ {
 		if b.Backend[host][idx].Location == location {
-			b.Backend[host][idx].Upstream = newUpstream
+			b.Backend[host][idx].Address = newAddress
+			return nil
+		}
+	}
+	return fmt.Errorf("endpoint %s was not found for host %s.", location, host)
+}
+
+/* SetTarget updates the upstream for the specified backend with a new one */
+func (b *BackendData) SetTarget(host string, location string, newTarget string) error {
+	/* lock for update */
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	/* perform the update */
+	for idx := 0; idx < len(b.Backend[host]); idx++ {
+		if b.Backend[host][idx].Location == location {
+			b.Backend[host][idx].Target = newTarget
 			return nil
 		}
 	}
@@ -291,7 +313,18 @@ func (b *BackendData) Remove(host string, location string) error {
 }
 
 /* Add new backend to the running list */
-func (b *BackendData) Add(host string, location string, upstreamAddress string) error {
+func (b *BackendData) Add(host string, location string, address string, target string) error {
+	if len(host) == 0 {
+		return fmt.Errorf("empty hostname not allowed")
+	}
+	if len(location) == 0 {
+		return fmt.Errorf("empty location not allowed")
+	}
+	if len(address) != 0 && address != "-" {
+		if _, _, err := net.SplitHostPort(address); err != nil {
+			return fmt.Errorf("invalid address:port pair: %s", address)
+		}
+	}
 	/* lock for backend addition */
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -306,7 +339,8 @@ func (b *BackendData) Add(host string, location string, upstreamAddress string) 
 		b.Backend[host],
 		Backend{
 			Location: location,
-			Upstream: upstreamAddress,
+			Address:  address,
+			Target:   target,
 			Active:   true,
 		},
 	)
@@ -342,7 +376,7 @@ func (b *BackendData) SetActive(host string, location string, active bool, autoC
 		fmt.Printf("auto-creating: %s/%s\n", host, location)
 		if idx := b.Find(host, "/"); idx != -1 {
 			/* attempt to auto-create the new endpoint */
-			if err := b.Add(host, location, fmt.Sprintf("%s/%s", b.Backend[host][idx].Upstream, location)); err != nil {
+			if err := b.Add(host, location, b.Backend[host][idx].Address, fmt.Sprintf("%s/%s", b.Backend[host][idx].Target, location)); err != nil {
 				return false
 			}
 			return b.SetActive(host, location, active, false)
@@ -416,7 +450,7 @@ func HandleProxyRequestGenerator(timeout time.Duration, static embed.FS, mainten
 		}
 
 		/* make sure endpoint exists */
-		if endpoint == nil || len(endpoint.Upstream) == 0 {
+		if endpoint == nil || len(endpoint.Target) == 0 {
 			if err := RenderStatus(w, http.StatusNotFound, tplNotFound, r.URL.String()); err != nil {
 				log.Println(err)
 			}
@@ -437,7 +471,7 @@ func HandleProxyRequestGenerator(timeout time.Duration, static embed.FS, mainten
 		/* make a client and request objects */
 		target := fmt.Sprintf(
 			"%s/%s",
-			strings.TrimRight(endpoint.Upstream, "/"),
+			strings.TrimRight(endpoint.Target, "/"),
 			strings.TrimLeft(
 				strings.TrimPrefix(
 					strings.TrimLeft(r.URL.String(), "/"),
@@ -447,7 +481,22 @@ func HandleProxyRequestGenerator(timeout time.Duration, static embed.FS, mainten
 			),
 		)
 
+		/* prepare custom client transport */
 		client := http.Client{
+			Transport: &http.Transport{
+				Proxy: http.ProxyFromEnvironment,
+				DialContext: func(ctx context.Context, network string, address string) (net.Conn, error) {
+					if len(endpoint.Address) != 0 && endpoint.Address != "-" {
+						address = endpoint.Address
+					}
+					dialer := &net.Dialer{
+						Timeout:   time.Second * time.Duration(timeout),
+						KeepAlive: 15 * time.Second,
+					}
+					return dialer.DialContext(ctx, network, address)
+				},
+				TLSHandshakeTimeout: 5 * time.Second,
+			},
 			Timeout: time.Second * time.Duration(timeout),
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 				return http.ErrUseLastResponse
@@ -572,7 +621,8 @@ func strDuration(duration time.Duration) (strDuration string) {
 type RpcMessage struct {
 	Host      string     `json:"host"`
 	Location  string     `json:"location"`
-	Upstream  string     `json:"upstream"`
+	Address   string     `json:"address"`
+	Target    string     `json:"target"`
 	Payload   string     `json:"payload"`
 	Active    bool       `json:"active"`
 	Force     bool       `json:"force"`
@@ -631,7 +681,7 @@ func (r *RpcBroker) SetActive(msg *RpcMessage, reply *int) error {
 
 /* Add a new endpoint to the proxy server */
 func (r *RpcBroker) Add(msg *RpcMessage, reply *int) error {
-	if err := r.endPoint.Add(msg.Host, msg.Location, msg.Upstream); err != nil {
+	if err := r.endPoint.Add(msg.Host, msg.Location, msg.Address, msg.Target); err != nil {
 		return err
 	}
 	if err := r.endPoint.SaveConfiguration(r.configFile); err != nil {
@@ -662,7 +712,7 @@ func (r *RpcBroker) EditHost(msg *RpcMessage, reply *int) error {
 		fmt.Printf("oops\n")
 		return err
 	}
-	if err := r.endPoint.Add(msg.Payload, msg.Location, endpoint.Upstream); err != nil {
+	if err := r.endPoint.Add(msg.Payload, msg.Location, msg.Address, endpoint.Target); err != nil {
 		return err
 	}
 	if err := r.endPoint.SaveConfiguration(r.configFile); err != nil {
@@ -686,13 +736,28 @@ func (r *RpcBroker) EditLocation(msg *RpcMessage, reply *int) error {
 	return nil
 }
 
-/* EditUpstream changes upstream address of an endpoint */
-func (r *RpcBroker) EditUpstream(msg *RpcMessage, reply *int) error {
+/* EditAddress changes IP address of an endpoint */
+func (r *RpcBroker) EditAddress(msg *RpcMessage, reply *int) error {
 	var idx int
 	if idx = r.endPoint.Find(msg.Host, msg.Location); idx == -1 {
 		return fmt.Errorf("backend %s for host %s does not exist.", msg.Location, msg.Host)
 	}
-	if err := r.endPoint.SetUpstream(msg.Host, msg.Location, msg.Payload); err != nil {
+	if err := r.endPoint.SetAddress(msg.Host, msg.Location, msg.Address); err != nil {
+		return err
+	}
+	if err := r.endPoint.SaveConfiguration(r.configFile); err != nil {
+		return err
+	}
+	return nil
+}
+
+/* EditTarget changes upstream address of an endpoint */
+func (r *RpcBroker) EditTarget(msg *RpcMessage, reply *int) error {
+	var idx int
+	if idx = r.endPoint.Find(msg.Host, msg.Location); idx == -1 {
+		return fmt.Errorf("backend %s for host %s does not exist.", msg.Location, msg.Host)
+	}
+	if err := r.endPoint.SetTarget(msg.Host, msg.Location, msg.Payload); err != nil {
 		return err
 	}
 	if err := r.endPoint.SaveConfiguration(r.configFile); err != nil {
@@ -777,6 +842,7 @@ func cmdListBackendsFunc(m *RpcMessage, filter string) {
 		countLen    int
 		locationLen int
 		upstreamLen int
+		addressLen  int
 	)
 	/* calculate max elements lenghts */
 	for host, backends := range m.Endpoints {
@@ -787,21 +853,24 @@ func cmdListBackendsFunc(m *RpcMessage, filter string) {
 		for idx := range backends {
 			countLen = Max(Max(countLen, len(strconv.FormatUint(backends[idx].Counter.GetValue(), 10))), 5)
 			locationLen = Max(Max(locationLen, len(backends[idx].Location)), 8)
-			upstreamLen = Max(Max(upstreamLen, len(backends[idx].Upstream)), 16)
+			upstreamLen = Max(Max(upstreamLen, len(backends[idx].Target)), 6)
+			addressLen = Max(Max(addressLen, len(backends[idx].Address)), 7)
 		}
 	}
 	/* build format string */
 	hdrFormatStr := fmt.Sprintf(
-		"  \033[01;33m%%%ds  %%-%ds  %%-%ds  %%-%ds  %%-12s\033[00m\n",
+		"  \033[01;33m%%%ds  %%-%ds  %%-%ds  %%-%ds  %%-%ds  %%-12s\033[00m\n",
 		hostLen,
 		locationLen,
+		addressLen,
 		upstreamLen,
 		countLen,
 	)
 	formatStr := fmt.Sprintf(
-		"  \033[01;36m%%%ds\033[00m  %%-%ds  %%-%ds  %%-%dd  %%-12s\n",
+		"  \033[01;36m%%%ds\033[00m  %%-%ds  %%-%ds  %%-%ds  %%-%dd  %%-12s\n",
 		hostLen,
 		locationLen,
+		addressLen,
 		upstreamLen,
 		countLen,
 	)
@@ -820,7 +889,7 @@ func cmdListBackendsFunc(m *RpcMessage, filter string) {
 	}
 	slices.Sort(keys)
 	/* print list of backends */
-	fmt.Printf(hdrFormatStr, "Host", "Location", "Upstream Address", "Count", "Status")
+	fmt.Printf(hdrFormatStr, "Host", "Location", "Address", "Target", "Count", "Status")
 	for _, host := range keys {
 		backends := m.Endpoints[host]
 		for idx := range backends {
@@ -828,7 +897,8 @@ func cmdListBackendsFunc(m *RpcMessage, filter string) {
 				formatStr,
 				host,
 				backends[idx].Location,
-				backends[idx].Upstream,
+				backends[idx].Address,
+				backends[idx].Target,
 				backends[idx].Counter.Value,
 				activeMap[backends[idx].Active],
 			)
@@ -911,11 +981,13 @@ func main() {
 	cmdAdd := flag.Bool("add", false, "Create new endpoint")
 	cmdRemove := flag.Bool("remove", false, "Remove existing endpoint")
 	cmdEditHost := flag.String("edit-host", "", "Update specified host")
-	cmdEditLocation := flag.String("edit-location", "", "Update specified location")
-	cmdEditUpstream := flag.String("edit-upstream", "", "Update specified upstream address")
+	cmdEditLocation := flag.String("edit-location", "", "Update specified endpoint location")
+	cmdEditAddress := flag.String("edit-address", "", "Update specified endpoint address")
+	cmdEditTarget := flag.String("edit-target", "", "Update specified upstream URL")
 	cmdHost := flag.String("host", "*", "Host address for backend")
 	cmdLocation := flag.String("location", "", "Specify endpoint location")
-	cmdUpstream := flag.String("upstream", "", "Endpoint upstream address")
+	cmdAddress := flag.String("address", "-", "Specify endpoint IP address")
+	cmdTarget := flag.String("target", "", "Endpoint target address")
 	cmdFilter := flag.String("filter", "", "Filter output by host names when listing endpoints")
 	cmdAclList := flag.Bool("acl-list", false, "list whitelisted networks")
 	cmdAclAdd := flag.String("acl-add", "", "add cidr to the acl whitelist")
@@ -993,7 +1065,8 @@ func main() {
 		req := RpcMessage{
 			Host:     *cmdHost,
 			Location: *cmdLocation,
-			Upstream: *cmdUpstream,
+			Address:  *cmdAddress,
+			Target:   *cmdTarget,
 		}
 		if err := RpcClient(*rpcSocket).Call("RpcBroker.Add", &req, &reply); err != nil {
 			log.Fatal(err)
@@ -1028,13 +1101,24 @@ func main() {
 			log.Fatal(err)
 		}
 		return
-	case len(*cmdEditUpstream) != 0:
+	case len(*cmdEditAddress) != 0:
 		req := RpcMessage{
 			Host:     *cmdHost,
 			Location: *cmdLocation,
-			Payload:  *cmdEditUpstream,
+			Address:  *cmdEditAddress,
+			Payload:  *cmdEditLocation,
 		}
-		if err := RpcClient(*rpcSocket).Call("RpcBroker.EditUpstream", &req, &reply); err != nil {
+		if err := RpcClient(*rpcSocket).Call("RpcBroker.EditAddress", &req, &reply); err != nil {
+			log.Fatal(err)
+		}
+		return
+	case len(*cmdEditTarget) != 0:
+		req := RpcMessage{
+			Host:     *cmdHost,
+			Location: *cmdLocation,
+			Payload:  *cmdEditTarget,
+		}
+		if err := RpcClient(*rpcSocket).Call("RpcBroker.EditTarget", &req, &reply); err != nil {
 			log.Fatal(err)
 		}
 		return
