@@ -6,6 +6,10 @@ endpoints on the fly with a CLI interface.
 The dsproxy server is cappable of running with SSL support, which makes it possible to configure it to listen directly on 80/tcp or
 443/tcp for accepting https connections.
 
+It also supports endpoint IP address configuration (in the form ip:port) to avoid resolving target's IP addresses. Default behaviour
+is to resolve target's address (when no specific address is provided, in that case address is "-" by default). When ip:port pair is
+provided, it is used when initiating backend connection regardless of how target's address is resolved.
+
 ### Compilation
 
 To compile the binary simply run:
@@ -44,10 +48,10 @@ The list is then printed on the standard output.
 
 #### Add and endpoint
 
-To add new endpoint, all of host, location and upstream parameters must be specified. Additionally the -add parameter is required
+To add new endpoint, all of host, location and target parameters must be specified. Additionally the -add parameter is required
 in order to create a new endpoint configuration:
 
-    ./dsproxy -add -host some.host.com -location test/location -upstream https://www.google.com
+    ./dsproxy -add -host some.host.com -location test/location -target https://www.google.com
 
 When the default host is used '\*', the -host parameter can be omitted:
 
@@ -59,6 +63,7 @@ When the default host is used '\*', the -host parameter can be omitted:
 An endpoint is always identified by a host and location. In order to edit an endpoint it should be identified and the field to
 edit should be specified:
 
-    ./dsproxy -host some.host.com -location test/location          -edit-host some.other.host.com
+    ./dsproxy -host some.host.com       -location test/location    -edit-host     some.other.host.com
     ./dsproxy -host some.other.host.com -location test/location    -edit-location example/location
-    ./dsproxy -host some.other.host.com -location example/location -edit-upstream https://www.duckduckgo.com
+    ./dsproxy -host some.other.host.com -location example/location -edit-target   https://www.duckduckgo.com
+    ./dsproxy -host some.other.host.com -location example/location -edit-address  127.0.1.1:443
