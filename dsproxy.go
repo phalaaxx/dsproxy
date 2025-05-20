@@ -37,6 +37,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"golang.org/x/sys/unix"
 	"html/template"
 	"io"
 	"log"
@@ -50,6 +51,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -1121,12 +1123,31 @@ func main() {
 				httpServer.TLSConfig = &tls.Config{
 					GetCertificate: kp.GetCertificate,
 				}
+				/* listen config */
+				lc := &net.ListenConfig{
+					Control: func(network string, address string, conn syscall.RawConn) (opErr error) {
+						err := conn.Control(
+							func(fd uintptr) {
+								opErr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_REUSEPORT, 1)
+							},
+						)
+						if err != nil {
+							return err
+						}
+						return
+					},
+				}
+				/* initialize listener */
+				ln, err := lc.Listen(context.Background(), "tcp", httpServer.Addr)
+				if err != nil {
+					log.Fatal(err)
+				}
 				/* start certificate checks */
 				if err = kp.UpdateLoop(); err != nil {
 					log.Fatal(err)
 				}
 				/* start ssl server */
-				if err := httpServer.ListenAndServeTLS("", ""); err != http.ErrServerClosed {
+				if err := httpServer.ServeTLS(ln, "", ""); err != http.ErrServerClosed {
 					log.Fatal(err)
 				}
 			} else {
