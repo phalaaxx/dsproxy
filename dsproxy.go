@@ -110,6 +110,87 @@ func NewMutexUInt64() MutexUInt64 {
 	}
 }
 
+/* SSLKeyPair implements GetCertificate */
+type SSLKeyPair struct {
+	mu      sync.RWMutex
+	cert    *tls.Certificate
+	crtPath string
+	keyPath string
+	mtime   time.Time
+}
+
+/* reload certificate */
+func (kp *SSLKeyPair) reload() error {
+	cert, err := tls.LoadX509KeyPair(kp.crtPath, kp.keyPath)
+	if err != nil {
+		return err
+	}
+	kp.mu.Lock()
+	defer kp.mu.Unlock()
+	kp.cert = &cert
+	return nil
+}
+
+/* GetCertificate is used by web server to get server certificate */
+func (kp *SSLKeyPair) GetCertificate(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+	kp.mu.RLock()
+	defer kp.mu.RUnlock()
+	return kp.cert, nil
+}
+
+/* UpdateLoop runs a background process to check for certificate updates */
+func (kp *SSLKeyPair) UpdateLoop() error {
+	if len(kp.crtPath) == 0 || len(kp.keyPath) == 0 {
+		return fmt.Errorf("Certificate and certificate keys must be provided.")
+	}
+	loop := func() {
+		for {
+			time.Sleep(time.Minute)
+			/* check certificate modification time */
+			crtFi, err := os.Stat(kp.crtPath)
+			if err != nil {
+				fmt.Printf("kp.UpdateLoop: os.Stat: %v\n", err)
+				continue
+			}
+			if crtFi.ModTime().After(kp.mtime) {
+				kp.mtime = crtFi.ModTime()
+				if err = kp.reload(); err != nil {
+					fmt.Printf("kp.UpdateLoop: reload: %v\n", err)
+				}
+				continue
+			}
+			/* check certificate key modification time */
+			keyFi, err := os.Stat(kp.keyPath)
+			if err != nil {
+				fmt.Printf("kp.UpdateLoop: os.Stat: %v\n", err)
+				continue
+			}
+			if keyFi.ModTime().After(kp.mtime) {
+				kp.mtime = keyFi.ModTime()
+				if err = kp.reload(); err != nil {
+					fmt.Printf("kp.UpdateLoop: reload: %v\n", err)
+				}
+				continue
+			}
+		}
+	}
+	go loop()
+	return nil
+}
+
+/* NewSSLKeyPair returns new SSLKeyPair object */
+func NewSSLKeyPair(crtPath string, keyPath string) (*SSLKeyPair, error) {
+	kp := &SSLKeyPair{
+		mu:      sync.RWMutex{},
+		crtPath: crtPath,
+		keyPath: keyPath,
+	}
+	if err := kp.reload(); err != nil {
+		return nil, err
+	}
+	return kp, nil
+}
+
 /* Backend represents backend server data */
 type Backend struct {
 	ID       int         `json:"id"`
@@ -1009,9 +1090,8 @@ func main() {
 		/* start requests per second statistics server */
 		go endPoint.RequestsPerSecondServer()
 
-		/* create shutdown channel */
-		shutdown := make(chan bool)
 		/* prepare server configuration */
+		shutdown := make(chan bool)
 		httpServer := &http.Server{
 			TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
 			Addr:         *bindAddress,
@@ -1027,11 +1107,25 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
+		/* configure SSL certificate key reloader */
+		var kp *SSLKeyPair
 		/* start http server */
 		startHttpServer := func() {
 			if len(*sslCertificate) != 0 && len(*sslCertificateKey) != 0 {
+				/* cofigure SSL certificate reloader */
+				kp, err = NewSSLKeyPair(*sslCertificate, *sslCertificateKey)
+				if err != nil {
+					log.Fatal(err)
+				}
+				httpServer.TLSConfig = &tls.Config{
+					GetCertificate: kp.GetCertificate,
+				}
+				/* start certificate checks */
+				if err = kp.UpdateLoop(); err != nil {
+					log.Fatal(err)
+				}
 				/* start ssl server */
-				if err := httpServer.ListenAndServeTLS(*sslCertificate, *sslCertificateKey); err != http.ErrServerClosed {
+				if err := httpServer.ListenAndServeTLS("", ""); err != http.ErrServerClosed {
 					log.Fatal(err)
 				}
 			} else {
@@ -1043,6 +1137,7 @@ func main() {
 		}
 		go startHttpServer()
 
+		/* wait for shutdown command */
 		<-shutdown
 		if err := httpServer.Shutdown(context.Background()); err != nil {
 			log.Fatal(err)
