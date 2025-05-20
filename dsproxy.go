@@ -742,8 +742,9 @@ func (r *RpcBroker) Status(arg *int, message *RpcMessage) error {
 	r.endPoint.mu.RUnlock()
 
 	message.Payload = fmt.Sprintf(
-		"uptime: %s   rate: %d/s",
+		"uptime: %s   total: %d   rate: %d/s",
 		strDuration(time.Now().Sub(r.startTime)),
+		r.endPoint.RequestsCounter.GetValue(),
 		r.endPoint.RequestsPerSecond.GetValue(),
 	)
 
