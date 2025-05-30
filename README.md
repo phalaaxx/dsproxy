@@ -1,7 +1,8 @@
 ## dsproxy
 
-A dead simple proxy is a hot-configurable reverse proxy server with virtual hosts support. It is also able to activate or deactivate
-endpoints on the fly with a CLI interface.
+*dsproxy* (short for dead simple proxy) is a high performance hot-configurable reverse proxy server with virtual hosts and load
+balancing support (round-robin). It is also able to activate or deactivate endpoints on the fly with a CLI interface and implements
+ACL for addresses that should always pass through the proxy server.
 
 The dsproxy server is cappable of running with SSL support, which makes it possible to configure it to listen directly on 80/tcp or
 443/tcp for accepting https connections.
@@ -9,6 +10,9 @@ The dsproxy server is cappable of running with SSL support, which makes it possi
 It also supports endpoint IP address configuration (in the form ip:port) to avoid resolving target's IP addresses. Default behaviour
 is to resolve target's address (when no specific address is provided, in that case address is "-" by default). When ip:port pair is
 provided, it is used when initiating backend connection regardless of how target's address is resolved.
+
+Endpoints support multiple ip:port address pairs that are used sequentially, which in effect results in a round-robin load balancing
+support.
 
 ### Compilation
 
@@ -66,4 +70,4 @@ edit should be specified:
     ./dsproxy -host some.host.com       -location test/location    -edit-host     some.other.host.com
     ./dsproxy -host some.other.host.com -location test/location    -edit-location example/location
     ./dsproxy -host some.other.host.com -location example/location -edit-target   https://www.duckduckgo.com
-    ./dsproxy -host some.other.host.com -location example/location -edit-address  127.0.1.1:443
+    ./dsproxy -host some.other.host.com -location example/location -address-add   127.0.1.1:443

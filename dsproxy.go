@@ -61,6 +61,18 @@ var (
 	static embed.FS
 )
 
+/* MutexTransaction runs a callback function in a mutex lock */
+func MutexTransaction(mu sync.RWMutex, readWrite bool, callback func(args ...interface{}) error, args ...interface{}) error {
+	if readWrite {
+		mu.Lock()
+		defer mu.Unlock()
+	} else {
+		mu.RLock()
+		defer mu.RUnlock()
+	}
+	return callback(args...)
+}
+
 /* MutexUInt64 specifies an integer with mutex struct */
 type MutexUInt64 struct {
 	Value uint64       `json:"-"`
@@ -68,40 +80,50 @@ type MutexUInt64 struct {
 }
 
 /* Increase integer value by one */
-func (m *MutexUInt64) Increase() {
-	m.mu.Lock()
-	m.Value = m.Value + 1
-	m.mu.Unlock()
+func (m *MutexUInt64) Increase() (ret uint64) {
+	MutexTransaction(m.mu, true, func(args ...interface{}) error {
+		ret = m.Value
+		m.Value++
+		return nil
+	})
+	return
 }
 
 /* Decrease integer value by one */
-func (m *MutexUInt64) Decrease() {
-	m.mu.Lock()
-	m.Value = m.Value - 1
-	m.mu.Unlock()
+func (m *MutexUInt64) Decrease() (ret uint64) {
+	MutexTransaction(m.mu, true, func(args ...interface{}) error {
+		ret = m.Value
+		m.Value--
+		return nil
+	})
+	return
 }
 
 /* Set integer value */
 func (m *MutexUInt64) SetValue(value uint64) {
-	m.mu.Lock()
-	m.Value = value
-	m.mu.Unlock()
+	MutexTransaction(m.mu, true, func(args ...interface{}) error {
+		m.Value = value
+		return nil
+	})
+	return
 }
 
 /* Read integer value */
-func (m MutexUInt64) GetValue() uint64 {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.Value
+func (m MutexUInt64) GetValue() (ret uint64) {
+	MutexTransaction(m.mu, false, func(args ...interface{}) error {
+		ret = m.Value
+		return nil
+	})
+	return
 }
 
 /* GetReset reads and clears value */
-func (m *MutexUInt64) GetReset() uint64 {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	value := m.Value
-	m.Value = 0
-	return value
+func (m *MutexUInt64) GetReset() (ret uint64) {
+	MutexTransaction(m.mu, true, func(args ...interface{}) error {
+		ret = m.Value
+		return nil
+	})
+	return
 }
 
 /* NewMutexUInt64 creates a MutexUInt64 instance */
@@ -127,17 +149,19 @@ func (kp *SSLKeyPair) reload() error {
 	if err != nil {
 		return err
 	}
-	kp.mu.Lock()
-	defer kp.mu.Unlock()
-	kp.cert = &cert
-	return nil
+	return MutexTransaction(kp.mu, true, func(args ...interface{}) error {
+		kp.cert = &cert
+		return nil
+	})
 }
 
 /* GetCertificate is used by web server to get server certificate */
-func (kp *SSLKeyPair) GetCertificate(*tls.ClientHelloInfo) (*tls.Certificate, error) {
-	kp.mu.RLock()
-	defer kp.mu.RUnlock()
-	return kp.cert, nil
+func (kp *SSLKeyPair) GetCertificate(*tls.ClientHelloInfo) (ret *tls.Certificate, err error) {
+	MutexTransaction(kp.mu, false, func(args ...interface{}) error {
+		ret = kp.cert
+		return nil
+	})
+	return
 }
 
 /* UpdateLoop runs a background process to check for certificate updates */
@@ -193,15 +217,80 @@ func NewSSLKeyPair(crtPath string, keyPath string) (*SSLKeyPair, error) {
 	return kp, nil
 }
 
+/* BackendAddr couples a backend IP address with a counter */
+type BackendAddr struct {
+	Address string      `json:"address"`
+	Counter MutexUInt64 `json:"counter"`
+}
+
+/* BackendAddrList automates backend address usage */
+type BackendAddrList struct {
+	mu        sync.RWMutex  `json:"-"`
+	index     MutexUInt64   `json:"index"`
+	Addresses []BackendAddr `json:"addresses"`
+}
+
+/* GetAddrIndex returns index of specified IP address, -1 if not found */
+func (b *BackendAddrList) GetAddrIndex(address string) (ret int) {
+	ret = -1
+	MutexTransaction(b.mu, false, func(args ...interface{}) error {
+		for idx := 0; idx < len(b.Addresses); idx++ {
+			if b.Addresses[idx].Address == address {
+				ret = idx
+				break
+			}
+		}
+		return nil
+	})
+	return
+}
+
+/* Update address list by adding or removing the specified address */
+func (b *BackendAddrList) Update(address string, present bool) {
+	addrIndex := b.GetAddrIndex(address)
+	/* add new address in the list if not yet present */
+	if addrIndex == -1 {
+		if present {
+			MutexTransaction(b.mu, true, func(args ...interface{}) error {
+				b.Addresses = append(b.Addresses, BackendAddr{Address: address})
+				return nil
+			})
+		}
+		return
+	}
+	/* address is present in the list, remove it if it shoud not be there */
+	if present {
+		MutexTransaction(b.mu, true, func(args ...interface{}) error {
+			b.Addresses = append(b.Addresses[:addrIndex], b.Addresses[addrIndex+1:]...)
+			return nil
+		})
+	}
+}
+
+/* GetInc returns next address from a list and updates stats */
+func (b *BackendAddrList) GetInc() (ret string) {
+	if len(b.Addresses) == 0 {
+		return ""
+	}
+	MutexTransaction(b.index.mu, true, func(args ...interface{}) error {
+		idx := b.index.Value % uint64(len(b.Addresses))
+		ret = b.Addresses[idx].Address
+		b.Addresses[idx].Counter.Increase()
+		b.index.Value++
+		return nil
+	})
+	return
+}
+
 /* Backend represents backend server data */
 type Backend struct {
-	ID       int         `json:"id"`
-	Location string      `json:"location"`
-	Address  string      `json:"address"`
-	Target   string      `json:"target"`
-	Counter  MutexUInt64 `json:"counter"`
-	Active   bool        `json:"active"`
-	Headers  http.Header `json:"headers"`
+	ID       int             `json:"id"`
+	Location string          `json:"location"`
+	Target   string          `json:"target"`
+	AddrList BackendAddrList `json:"addrlist"`
+	Counter  MutexUInt64     `json:"counter"`
+	Active   bool            `json:"active"`
+	Headers  http.Header     `json:"headers"`
 }
 
 type BackendList []Backend
@@ -255,25 +344,25 @@ func (b BackendData) AclCheck(address string) bool {
 
 /* SaveConfiguration stores endpoints configuration to a JSON file */
 func (b *BackendData) SaveConfiguration(name string) error {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	/* create configuration file */
-	file, err := os.Create(name)
-	if err != nil {
-		return err
-	}
-	CloseFile := func() {
-		if err := file.Close(); err != nil {
-			log.Println(err)
+	return MutexTransaction(b.mu, false, func(args ...interface{}) error {
+		/* create configuration file */
+		file, err := os.Create(name)
+		if err != nil {
+			return err
 		}
-	}
-	defer CloseFile()
-	encoder := json.NewEncoder(file)
-	/* save configuration */
-	if err = encoder.Encode(b); err != nil {
-		return err
-	}
-	return nil
+		CloseFile := func() {
+			if err := file.Close(); err != nil {
+				log.Println(err)
+			}
+		}
+		defer CloseFile()
+		encoder := json.NewEncoder(file)
+		/* save configuration */
+		if err = encoder.Encode(b); err != nil {
+			return err
+		}
+		return nil
+	})
 }
 
 /* loadConfiguration reads a JSON file containing backend endpoints */
@@ -303,96 +392,102 @@ func loadConfiguration(name string) (*BackendData, error) {
 }
 
 /* Find an endpoint by looking up Location */
-func (b BackendData) Find(host string, location string) int {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	for idx := 0; idx < len(b.Backend[host]); idx++ {
-		if b.Backend[host][idx].Location == location {
-			return idx
+func (b BackendData) Find(host string, location string) (ret int) {
+	ret = -1
+	MutexTransaction(b.mu, false, func(args ...interface{}) error {
+		for idx := 0; idx < len(b.Backend[host]); idx++ {
+			if b.Backend[host][idx].Location == location {
+				ret = idx
+				break
+			}
 		}
-	}
-	return -1
+		return nil
+	})
+	return ret
 }
 
 /* SetLocation updates the specified location with a new one */
 func (b *BackendData) SetLocation(host string, location string, newPath string) error {
 	/* make sure newPath does not yet exist */
-	b.mu.RLock()
-	for idx := 0; idx < len(b.Backend[host]); idx++ {
-		if b.Backend[host][idx].Location == newPath {
-			/* newPath alread exists, don't update */
-			b.mu.RUnlock()
-			return fmt.Errorf("endpoint %s already exists for host %s.", newPath, host)
+	err := MutexTransaction(b.mu, false, func(args ...interface{}) error {
+		for idx := 0; idx < len(b.Backend[host]); idx++ {
+			if b.Backend[host][idx].Location == newPath {
+				/* newPath alread exists, don't update */
+				return fmt.Errorf("endpoint %s already exists for host %s.", newPath, host)
+			}
 		}
+		return nil
+	})
+	if err != nil {
+		return err
 	}
-	b.mu.RUnlock()
 	/* lock for update */
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	/* perform the update */
-	for idx := 0; idx < len(b.Backend[host]); idx++ {
-		if b.Backend[host][idx].Location == location {
-			b.Backend[host][idx].Location = newPath
-			return nil
+	return MutexTransaction(b.mu, true, func(args ...interface{}) error {
+		/* perform the update */
+		for idx := 0; idx < len(b.Backend[host]); idx++ {
+			if b.Backend[host][idx].Location == location {
+				b.Backend[host][idx].Location = newPath
+				return nil
+			}
 		}
-	}
-	return fmt.Errorf("endpoint %s was not found for host %s.", location, host)
+		return fmt.Errorf("endpoint %s was not found for host %s.", location, host)
+	})
 }
 
-/* SetAddress updates the specified IP address with a new one */
-func (b *BackendData) SetAddress(host string, location string, newAddress string) error {
+/* AddressUpdate updates the address list by adding or removing the specified IP address */
+func (b *BackendData) AddressUpdate(host string, location string, address string, present bool) error {
 	/* check for valid address */
-	if len(newAddress) != 0 && newAddress != "-" {
-		if _, _, err := net.SplitHostPort(newAddress); err != nil {
-			return fmt.Errorf("invalid address:port pair: %s", newAddress)
+	if len(address) != 0 && address != "-" {
+		if _, _, err := net.SplitHostPort(address); err != nil {
+			return fmt.Errorf("invalid address:port pair: %s", address)
 		}
 	}
 	/* lock for update */
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	/* perform the update */
-	for idx := 0; idx < len(b.Backend[host]); idx++ {
-		if b.Backend[host][idx].Location == location {
-			b.Backend[host][idx].Address = newAddress
-			return nil
+	return MutexTransaction(b.mu, true, func(args ...interface{}) error {
+		/* perform the update */
+		for idx := 0; idx < len(b.Backend[host]); idx++ {
+			if b.Backend[host][idx].Location == location {
+				b.Backend[host][idx].AddrList.Update(address, present)
+				return nil
+			}
 		}
-	}
-	return fmt.Errorf("endpoint %s was not found for host %s.", location, host)
+		return fmt.Errorf("endpoint %s was not found for host %s.", location, host)
+	})
 }
 
 /* SetTarget updates the upstream for the specified backend with a new one */
 func (b *BackendData) SetTarget(host string, location string, newTarget string) error {
 	/* lock for update */
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	/* perform the update */
-	for idx := 0; idx < len(b.Backend[host]); idx++ {
-		if b.Backend[host][idx].Location == location {
-			b.Backend[host][idx].Target = newTarget
-			return nil
+	return MutexTransaction(b.mu, true, func(args ...interface{}) error {
+		/* perform the update */
+		for idx := 0; idx < len(b.Backend[host]); idx++ {
+			if b.Backend[host][idx].Location == location {
+				b.Backend[host][idx].Target = newTarget
+				return nil
+			}
 		}
-	}
-	return fmt.Errorf("endpoint %s was not found for host %s.", location, host)
+		return fmt.Errorf("endpoint %s was not found for host %s.", location, host)
+	})
 }
 
 /* Remove specified endpoint */
 func (b *BackendData) Remove(host string, location string) error {
 	/* lock for backend removal */
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	/* lookup specified backend by location */
-	for idx := 0; idx < len(b.Backend[host]); idx++ {
-		if b.Backend[host][idx].Location == location {
-			/* remove backend */
-			b.Backend[host] = append(b.Backend[host][:idx], b.Backend[host][idx+1:]...)
-			/* remove host if there are no more backends */
-			if len(b.Backend[host]) == 0 {
-				delete(b.Backend, host)
+	return MutexTransaction(b.mu, true, func(args ...interface{}) error {
+		/* lookup specified backend by location */
+		for idx := 0; idx < len(b.Backend[host]); idx++ {
+			if b.Backend[host][idx].Location == location {
+				/* remove backend */
+				b.Backend[host] = append(b.Backend[host][:idx], b.Backend[host][idx+1:]...)
+				/* remove host if there are no more backends */
+				if len(b.Backend[host]) == 0 {
+					delete(b.Backend, host)
+				}
+				return nil
 			}
-			return nil
 		}
-	}
-	return fmt.Errorf("backend %s was not found for host %s.", location, host)
+		return fmt.Errorf("backend %s was not found for host %s.", location, host)
+	})
 }
 
 /* Add new backend to the running list */
@@ -409,58 +504,66 @@ func (b *BackendData) Add(host string, location string, address string, target s
 		}
 	}
 	/* lock for backend addition */
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	/* look for existing backend with same location */
-	for idx := 0; idx < len(b.Backend[host]); idx++ {
-		if b.Backend[host][idx].Location == location {
-			return fmt.Errorf("non-unique location path %s for host %s.", location, host)
+	return MutexTransaction(b.mu, true, func(args ...interface{}) error {
+		/* look for existing backend with same location */
+		for idx := 0; idx < len(b.Backend[host]); idx++ {
+			if b.Backend[host][idx].Location == location {
+				return fmt.Errorf("non-unique location path %s for host %s.", location, host)
+			}
 		}
-	}
-	/* add the new backend */
-	b.Backend[host] = append(
-		b.Backend[host],
-		Backend{
+		/* add the new backend */
+		backend := Backend{
 			Location: location,
-			Address:  address,
 			Target:   target,
 			Active:   true,
-		},
-	)
-	slices.SortFunc(
-		b.Backend[host],
-		func(b Backend, a Backend) int {
-			if len(a.Location) < len(b.Location) {
-				return -1
-			}
-			if len(a.Location) > len(b.Location) {
-				return 1
-			}
-			return 0
-		},
-	)
-	return nil
+		}
+		if len(address) != 0 {
+			backend.AddrList.Update(address, true)
+		}
+		b.Backend[host] = append(b.Backend[host], backend)
+		slices.SortFunc(
+			b.Backend[host],
+			func(b Backend, a Backend) int {
+				if len(a.Location) < len(b.Location) {
+					return -1
+				}
+				if len(a.Location) > len(b.Location) {
+					return 1
+				}
+				return 0
+			},
+		)
+		return nil
+	})
 }
 
 /* SetActive sets endpoint Active status, returns true on success */
-func (b *BackendData) SetActive(host string, location string, active bool, autoCreate bool) bool {
-	b.mu.Lock()
-	/* look for existing endpoint and set its status */
-	for idx := 0; idx < len(b.Backend[host]); idx++ {
-		if b.Backend[host][idx].Location == location {
-			b.Backend[host][idx].Active = active
-			b.mu.Unlock()
-			return true
+func (b *BackendData) SetActive(host string, location string, active bool, autoCreate bool) (ret bool) {
+	MutexTransaction(b.mu, true, func(args ...interface{}) error {
+		/* look for existing endpoint and set its status */
+		for idx := 0; idx < len(b.Backend[host]); idx++ {
+			if b.Backend[host][idx].Location == location {
+				b.Backend[host][idx].Active = active
+				ret = true
+				break
+			}
 		}
+		return nil
+	})
+	if ret == true {
+		return
 	}
-	b.mu.Unlock()
 	/* create endpoint if it does not exists and autoCreate is true */
 	if autoCreate {
 		fmt.Printf("auto-creating: %s/%s\n", host, location)
 		if idx := b.Find(host, "/"); idx != -1 {
 			/* attempt to auto-create the new endpoint */
-			if err := b.Add(host, location, b.Backend[host][idx].Address, fmt.Sprintf("%s/%s", b.Backend[host][idx].Target, location)); err != nil {
+			if err := b.Add(host, location, "-", fmt.Sprintf("%s/%s", b.Backend[host][idx].Target, location)); err != nil {
 				return false
+			}
+			/* copy backend IP addresses */
+			for idx := 0; idx < len(b.Backend[host][idx].AddrList.Addresses); idx++ {
+				b.AddressUpdate(host, location, b.Backend[host][idx].AddrList.Addresses[idx].Address, true)
 			}
 			return b.SetActive(host, location, active, false)
 		}
@@ -515,131 +618,132 @@ func HandleProxyRequestGenerator(timeout time.Duration, static embed.FS, mainten
 		}
 
 		/* lock endpoint for reading */
-		endPoint.mu.RLock()
-		defer endPoint.mu.RUnlock()
+		MutexTransaction(endPoint.mu, false, func(args ...interface{}) error {
 
-		/* get backend name */
-		var endpoint *Backend
-		for idx := range endPoint.Backend[host] {
-			/* match beginning of a location */
-			location := endPoint.Backend[host][idx].Location
-			if location != "/" {
-				location = fmt.Sprintf("/%s/", location)
+			/* get backend name */
+			var endpoint *Backend
+			for idx := range endPoint.Backend[host] {
+				/* match beginning of a location */
+				location := endPoint.Backend[host][idx].Location
+				if location != "/" {
+					location = fmt.Sprintf("/%s/", location)
+				}
+				if strings.HasPrefix(r.URL.String(), location) {
+					endpoint = &endPoint.Backend[host][idx]
+					break
+				}
 			}
-			if strings.HasPrefix(r.URL.String(), location) {
-				endpoint = &endPoint.Backend[host][idx]
-				break
+
+			/* make sure endpoint exists */
+			if endpoint == nil || len(endpoint.Target) == 0 {
+				if err := RenderStatus(w, http.StatusNotFound, tplNotFound, r.URL.String()); err != nil {
+					log.Println(err)
+				}
+				return err
 			}
-		}
 
-		/* make sure endpoint exists */
-		if endpoint == nil || len(endpoint.Target) == 0 {
-			if err := RenderStatus(w, http.StatusNotFound, tplNotFound, r.URL.String()); err != nil {
-				log.Println(err)
+			/* check endpoint active status */
+			if !endpoint.Active && !endPoint.AclCheck(r.RemoteAddr) {
+				/* render maintenance page and exit */
+				if err := RenderStatus(w, http.StatusServiceUnavailable, tplMaintenance, r.URL.String()); err != nil {
+					log.Println(err)
+				}
+				return err
 			}
-			return
-		}
 
-		/* check endpoint active status */
-		if !endpoint.Active && !endPoint.AclCheck(r.RemoteAddr) {
-			/* render maintenance page and exit */
-			if err := RenderStatus(w, http.StatusServiceUnavailable, tplMaintenance, r.URL.String()); err != nil {
-				log.Println(err)
-			}
-			return
-		}
+			endpoint.Counter.Increase()
 
-		endpoint.Counter.Increase()
-
-		/* make a client and request objects */
-		target := fmt.Sprintf(
-			"%s/%s",
-			strings.TrimRight(endpoint.Target, "/"),
-			strings.TrimLeft(
-				strings.TrimPrefix(
-					strings.TrimLeft(r.URL.String(), "/"),
-					endpoint.Location,
+			/* make a client and request objects */
+			target := fmt.Sprintf(
+				"%s/%s",
+				strings.TrimRight(endpoint.Target, "/"),
+				strings.TrimLeft(
+					strings.TrimPrefix(
+						strings.TrimLeft(r.URL.String(), "/"),
+						endpoint.Location,
+					),
+					"/",
 				),
-				"/",
-			),
-		)
+			)
 
-		/* prepare custom client transport */
-		client := http.Client{
-			Transport: &http.Transport{
-				Proxy: http.ProxyFromEnvironment,
-				DialContext: func(ctx context.Context, network string, address string) (net.Conn, error) {
-					if len(endpoint.Address) != 0 && endpoint.Address != "-" {
-						address = endpoint.Address
-					}
-					dialer := &net.Dialer{
-						Timeout:   time.Second * time.Duration(timeout),
-						KeepAlive: 15 * time.Second,
-					}
-					return dialer.DialContext(ctx, network, address)
+			/* prepare custom client transport */
+			client := http.Client{
+				Transport: &http.Transport{
+					Proxy: http.ProxyFromEnvironment,
+					DialContext: func(ctx context.Context, network string, address string) (net.Conn, error) {
+						if addr := endpoint.AddrList.GetInc(); len(addr) != 0 && addr != "-" {
+							address = addr
+						}
+						dialer := &net.Dialer{
+							Timeout:   time.Second * time.Duration(timeout),
+							KeepAlive: 15 * time.Second,
+						}
+						return dialer.DialContext(ctx, network, address)
+					},
+					TLSHandshakeTimeout: 5 * time.Second,
 				},
-				TLSHandshakeTimeout: 5 * time.Second,
-			},
-			Timeout: time.Second * time.Duration(timeout),
-			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
-				return http.ErrUseLastResponse
-			},
-		}
-		req, err := http.NewRequest(r.Method, target, r.Body)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		/* populate request headers */
-		for key, headers := range r.Header {
-			if skipHeader, ok := hopHeaders[strings.ToLower(key)]; ok {
-				if skipHeader {
-					continue
+				Timeout: time.Second * time.Duration(timeout),
+				CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+					return http.ErrUseLastResponse
+				},
+			}
+			req, err := http.NewRequest(r.Method, target, r.Body)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return err
+			}
+			/* populate request headers */
+			for key, headers := range r.Header {
+				if skipHeader, ok := hopHeaders[strings.ToLower(key)]; ok {
+					if skipHeader {
+						continue
+					}
+				}
+				for _, value := range headers {
+					req.Header.Add(key, value)
 				}
 			}
-			for _, value := range headers {
-				req.Header.Add(key, value)
+			if len(r.Header.Get("x-forwarded-for")) == 0 {
+				req.Header.Add("x-forwarded-for", r.RemoteAddr)
 			}
-		}
-		if len(r.Header.Get("x-forwarded-for")) == 0 {
-			req.Header.Add("x-forwarded-for", r.RemoteAddr)
-		}
 
-		/* perform proxy request */
-		resp, err = client.Do(req)
-		if err != nil {
-			if err := RenderStatus(w, http.StatusServiceUnavailable, tplUnavailable, r.URL.String()); err != nil {
-				log.Println(err)
+			/* perform proxy request */
+			resp, err = client.Do(req)
+			if err != nil {
+				if err := RenderStatus(w, http.StatusServiceUnavailable, tplUnavailable, r.URL.String()); err != nil {
+					log.Println(err)
+				}
+				return err
 			}
-			return
-		}
 
-		/* close body after job is finished */
-		closeBody := func() {
-			if err := resp.Body.Close(); err != nil {
-				log.Println(err)
-			}
-		}
-		defer closeBody()
-
-		/* copy over all headers from client to backend */
-		for key, headers := range resp.Header {
-			if skipHeader, ok := hopHeaders[strings.ToLower(key)]; ok {
-				if skipHeader {
-					continue
+			/* close body after job is finished */
+			closeBody := func() {
+				if err := resp.Body.Close(); err != nil {
+					log.Println(err)
 				}
 			}
-			for _, value := range headers {
-				w.Header().Add(key, value)
-			}
-		}
-		w.WriteHeader(resp.StatusCode)
+			defer closeBody()
 
-		/* copy data from upstream to client */
-		if _, err = io.Copy(w, resp.Body); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
+			/* copy over all headers from client to backend */
+			for key, headers := range resp.Header {
+				if skipHeader, ok := hopHeaders[strings.ToLower(key)]; ok {
+					if skipHeader {
+						continue
+					}
+				}
+				for _, value := range headers {
+					w.Header().Add(key, value)
+				}
+			}
+			w.WriteHeader(resp.StatusCode)
+
+			/* copy data from upstream to client */
+			if _, err = io.Copy(w, resp.Body); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return err
+			}
+			return nil
+		})
 	}
 }
 
@@ -731,25 +835,24 @@ func (r *RpcBroker) Shutdown(arg *int, reply *int) error {
 
 /* Status returns endpoints status */
 func (r *RpcBroker) Status(arg *int, message *RpcMessage) error {
-	r.endPoint.mu.RLock()
-	message.Endpoints = make(BackendMap)
-	for host, backends := range r.endPoint.Backend {
-		message.Endpoints[host] = make(BackendList, len(backends))
-		copy(message.Endpoints[host], backends)
-	}
-	message.Whitelist = make([]string, len(r.endPoint.Whitelist))
-	for idx := 0; idx < len(r.endPoint.Whitelist); idx++ {
-		message.Whitelist[idx] = r.endPoint.Whitelist[idx].String()
-	}
-	r.endPoint.mu.RUnlock()
-
+	MutexTransaction(r.endPoint.mu, false, func(args ...interface{}) error {
+		message.Endpoints = make(BackendMap)
+		for host, backends := range r.endPoint.Backend {
+			message.Endpoints[host] = make(BackendList, len(backends))
+			copy(message.Endpoints[host], backends)
+		}
+		message.Whitelist = make([]string, len(r.endPoint.Whitelist))
+		for idx := 0; idx < len(r.endPoint.Whitelist); idx++ {
+			message.Whitelist[idx] = r.endPoint.Whitelist[idx].String()
+		}
+		return nil
+	})
 	message.Payload = fmt.Sprintf(
 		"uptime: %s   total: %d   rate: %d/s",
 		strDuration(time.Now().Sub(r.startTime)),
 		r.endPoint.RequestsCounter.GetValue(),
 		r.endPoint.RequestsPerSecond.GetValue(),
 	)
-
 	return nil
 }
 
@@ -820,13 +923,28 @@ func (r *RpcBroker) EditLocation(msg *RpcMessage, reply *int) error {
 	return nil
 }
 
-/* EditAddress changes IP address of an endpoint */
-func (r *RpcBroker) EditAddress(msg *RpcMessage, reply *int) error {
+/* AddressAdd adds specified IP address to an endpoint */
+func (r *RpcBroker) AddressAdd(msg *RpcMessage, reply *int) error {
 	var idx int
 	if idx = r.endPoint.Find(msg.Host, msg.Location); idx == -1 {
 		return fmt.Errorf("backend %s for host %s does not exist.", msg.Location, msg.Host)
 	}
-	if err := r.endPoint.SetAddress(msg.Host, msg.Location, msg.Address); err != nil {
+	if err := r.endPoint.AddressUpdate(msg.Host, msg.Location, msg.Address, true); err != nil {
+		return err
+	}
+	if err := r.endPoint.SaveConfiguration(r.configFile); err != nil {
+		return err
+	}
+	return nil
+}
+
+/* AddressRemove removes specified IP address from an endpoint */
+func (r *RpcBroker) AddressRemove(msg *RpcMessage, reply *int) error {
+	var idx int
+	if idx = r.endPoint.Find(msg.Host, msg.Location); idx == -1 {
+		return fmt.Errorf("backend %s for host %s does not exist.", msg.Location, msg.Host)
+	}
+	if err := r.endPoint.AddressUpdate(msg.Host, msg.Location, msg.Address, false); err != nil {
 		return err
 	}
 	if err := r.endPoint.SaveConfiguration(r.configFile); err != nil {
@@ -901,14 +1019,14 @@ func (r *RpcBroker) AclRemove(element *string, reply *int) error {
 
 /* Clear hits statistics */
 func (r *RpcBroker) Clear(request *int, reply *int) error {
-	r.endPoint.mu.Lock()
-	defer r.endPoint.mu.Unlock()
-	for _, backends := range r.endPoint.Backend {
-		for idx := range backends {
-			backends[idx].Counter.SetValue(0)
+	return MutexTransaction(r.endPoint.mu, true, func(args ...interface{}) error {
+		for _, backends := range r.endPoint.Backend {
+			for idx := range backends {
+				backends[idx].Counter.SetValue(0)
+			}
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 /* Max returns the larger integer from a and b */
@@ -938,25 +1056,31 @@ func cmdListBackendsFunc(m *RpcMessage, filter string) {
 			countLen = Max(Max(countLen, len(strconv.FormatUint(backends[idx].Counter.GetValue(), 10))), 5)
 			locationLen = Max(Max(locationLen, len(backends[idx].Location)), 8)
 			upstreamLen = Max(Max(upstreamLen, len(backends[idx].Target)), 6)
-			addressLen = Max(Max(addressLen, len(backends[idx].Address)), 7)
+			for beIdx := 0; beIdx < len(backends[idx].AddrList.Addresses); beIdx++ {
+				addressLen = Max(Max(addressLen, len(backends[idx].AddrList.Addresses[beIdx].Address)), 7)
+			}
 		}
 	}
 	/* build format string */
 	hdrFormatStr := fmt.Sprintf(
-		"  \033[01;33m%%%ds  %%-%ds  %%-%ds  %%-%ds  %%-%ds  %%-12s\033[00m\n",
+		"  \033[01;33m%%%ds  %%-%ds  %%-%ds  %%%ds  %%-%ds  %%-12s\033[00m\n",
 		hostLen,
 		locationLen,
-		addressLen,
 		upstreamLen,
+		addressLen,
 		countLen,
 	)
 	formatStr := fmt.Sprintf(
-		"  \033[01;36m%%%ds\033[00m  %%-%ds  %%-%ds  %%-%ds  %%-%dd  %%-12s\n",
+		"  \033[01;36m%%%ds\033[00m  %%-%ds  %%-%ds  \033[01;36m%%%ds\033[00m  %%-%dd  %%-12s\n",
 		hostLen,
 		locationLen,
-		addressLen,
 		upstreamLen,
+		addressLen,
 		countLen,
+	)
+	addrStr := fmt.Sprintf(
+		"        \033[01;36m%%%-ds\033[00m  %%d\n",
+		hostLen+locationLen+upstreamLen+addressLen,
 	)
 	/* mapping between bool value and console message */
 	activeMap := map[bool]string{
@@ -973,19 +1097,32 @@ func cmdListBackendsFunc(m *RpcMessage, filter string) {
 	}
 	slices.Sort(keys)
 	/* print list of backends */
-	fmt.Printf(hdrFormatStr, "Host", "Location", "Address", "Target", "Count", "Status")
+	fmt.Printf(hdrFormatStr, "Host", "Location", "Target", "Address", "Count", "Status")
 	for _, host := range keys {
 		backends := m.Endpoints[host]
 		for idx := range backends {
+			primaryAddress := "-"
+			if len(backends[idx].AddrList.Addresses) != 0 {
+				primaryAddress = backends[idx].AddrList.Addresses[0].Address
+			}
+			/* print endpoint stats */
 			fmt.Printf(
 				formatStr,
 				host,
 				backends[idx].Location,
-				backends[idx].Address,
 				backends[idx].Target,
+				primaryAddress,
 				backends[idx].Counter.Value,
 				activeMap[backends[idx].Active],
 			)
+			/* print addresses stats */
+			for addrIdx := 1; addrIdx < len(backends[idx].AddrList.Addresses); addrIdx++ {
+				fmt.Printf(
+					addrStr,
+					backends[idx].AddrList.Addresses[addrIdx].Address,
+					backends[idx].AddrList.Addresses[addrIdx].Counter.GetValue(),
+				)
+			}
 		}
 	}
 	fmt.Printf("  \033[01;38m%s\033[00m\n", m.Payload)
@@ -1066,7 +1203,8 @@ func main() {
 	cmdRemove := flag.Bool("remove", false, "Remove existing endpoint")
 	cmdEditHost := flag.String("edit-host", "", "Update specified host")
 	cmdEditLocation := flag.String("edit-location", "", "Update specified endpoint location")
-	cmdEditAddress := flag.String("edit-address", "", "Update specified endpoint address")
+	cmdAddressAdd := flag.String("address-add", "", "Add specified endpoint IP address")
+	cmdAddressRemove := flag.String("address-remove", "", "Remove specified endpoint IP address")
 	cmdEditTarget := flag.String("edit-target", "", "Update specified upstream URL")
 	cmdHost := flag.String("host", "*", "Host address for backend")
 	cmdLocation := flag.String("location", "", "Specify endpoint location")
@@ -1218,14 +1356,25 @@ func main() {
 			log.Fatal(err)
 		}
 		return
-	case len(*cmdEditAddress) != 0:
+	case len(*cmdAddressAdd) != 0:
 		req := RpcMessage{
 			Host:     *cmdHost,
 			Location: *cmdLocation,
-			Address:  *cmdEditAddress,
+			Address:  *cmdAddressAdd,
 			Payload:  *cmdEditLocation,
 		}
-		if err := RpcClient(*rpcSocket).Call("RpcBroker.EditAddress", &req, &reply); err != nil {
+		if err := RpcClient(*rpcSocket).Call("RpcBroker.AddressAdd", &req, &reply); err != nil {
+			log.Fatal(err)
+		}
+		return
+	case len(*cmdAddressRemove) != 0:
+		req := RpcMessage{
+			Host:     *cmdHost,
+			Location: *cmdLocation,
+			Address:  *cmdAddressRemove,
+			Payload:  *cmdEditLocation,
+		}
+		if err := RpcClient(*rpcSocket).Call("RpcBroker.AddressRemove", &req, &reply); err != nil {
 			log.Fatal(err)
 		}
 		return
