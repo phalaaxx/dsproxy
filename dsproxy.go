@@ -121,6 +121,7 @@ func (m MutexUInt64) GetValue() (ret uint64) {
 func (m *MutexUInt64) GetReset() (ret uint64) {
 	MutexTransaction(m.mu, true, func(args ...interface{}) error {
 		ret = m.Value
+		m.Value = 0
 		return nil
 	})
 	return
@@ -308,9 +309,12 @@ type BackendData struct {
 
 /* update requests per second once every second */
 func (b *BackendData) RequestsPerSecondServer() {
+	last := uint64(0)
 	for {
+		current := b.RequestsCounter.GetValue()
+		b.RequestsPerSecond.SetValue(current - last)
+		last = current
 		time.Sleep(time.Second)
-		b.RequestsPerSecond.SetValue(b.RequestsCounter.GetReset())
 	}
 }
 
