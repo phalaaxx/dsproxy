@@ -55,11 +55,8 @@ import (
 	"time"
 )
 
-/* Global Variables */
-var (
-	//go:embed static/*
-	static embed.FS
-)
+//go:embed static/*
+var static embed.FS
 
 /* MutexTransaction runs a callback function in a mutex lock */
 func MutexTransaction(mu sync.RWMutex, readWrite bool, callback func(args ...interface{}) error, args ...interface{}) error {
