@@ -33,9 +33,9 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"dsproxy/clap"
 	"embed"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"golang.org/x/sys/unix"
 	"html/template"
@@ -1190,35 +1190,47 @@ func startRpcService(config string, rpcSocket string, httpServer *http.Server, s
 /* main program */
 func main() {
 	/* initialize global variables */
-	sslCertificate := flag.String("ssl-certificate", "", "SSL Certificate file")
-	sslCertificateKey := flag.String("ssl-certificate-key", "", "SSL Certificate Key file")
-	bindAddress := flag.String("bind-address", ":8000", "Address and port to bind proxy")
-	requestTimeout := flag.Int("request-timeout", 5, "Request timeout in seconds")
-	maintenancePage := flag.String("maintenance", "", "Path to maintenance html page")
-	configurationFile := flag.String("config", "dsproxy.json", "Endpoints configuration file")
-	cmdServer := flag.Bool("server", false, "Start dsproxy server")
-	cmdAutoCreate := flag.Bool("auto-create", false, "Auto create endpoint on deactivate if possible")
-	cmdActivate := flag.Bool("activate", false, "Set backend to active state")
-	cmdDeactivate := flag.Bool("deactivate", false, "Set backend to maintenance state")
-	cmdAdd := flag.Bool("add", false, "Create new endpoint")
-	cmdRemove := flag.Bool("remove", false, "Remove existing endpoint")
-	cmdEditHost := flag.String("edit-host", "", "Update specified host")
-	cmdEditLocation := flag.String("edit-location", "", "Update specified endpoint location")
-	cmdAddressAdd := flag.String("address-add", "", "Add specified endpoint IP address")
-	cmdAddressRemove := flag.String("address-remove", "", "Remove specified endpoint IP address")
-	cmdEditTarget := flag.String("edit-target", "", "Update specified upstream URL")
-	cmdHost := flag.String("host", "*", "Host address for backend")
-	cmdLocation := flag.String("location", "", "Specify endpoint location")
-	cmdAddress := flag.String("address", "-", "Specify endpoint IP address")
-	cmdTarget := flag.String("target", "", "Endpoint target address")
-	cmdFilter := flag.String("filter", "", "Filter output by host names when listing endpoints")
-	cmdAclList := flag.Bool("acl-list", false, "list whitelisted networks")
-	cmdAclAdd := flag.String("acl-add", "", "add cidr to the acl whitelist")
-	cmdAclRemove := flag.String("acl-remove", "", "remove cidr from the acl whitelist")
-	cmdClear := flag.Bool("clear", false, "Clear hits statistics")
-	cmdShutdown := flag.Bool("shutdown", false, "Shutdown current dsproxy instance")
-	rpcSocket := flag.String("rpc-socket", "/tmp/dsproxy.sock", "Unix domain socket for RPC communication")
-	flag.Parse()
+	sslCertificate := clap.String(0, "ssl-certificate", "", "SSL Certificate file", false)
+	sslCertificateKey := clap.String(0, "ssl-certificate-key", "", "SSL Certificate Key file", false)
+	bindAddress := clap.String('b', "bind-address", ":8000", "Address and port to bind proxy [default :8000]", false)
+	requestTimeout := clap.Int('t', "request-timeout", 5, "Request timeout in seconds [default 5]", false)
+	maintenancePage := clap.String('m', "maintenance", "", "Path to maintenance html page", false)
+	configurationFile := clap.String(
+		'c',
+		"config",
+		"dsproxy.json",
+		"Endpoints configuration file [default dsproxy.json]",
+		false,
+	)
+	cmdServer := clap.Bool('s', "server", false, "Start dsproxy server", false)
+	cmdAutoCreate := clap.Bool(0, "auto-create", false, "Auto create endpoint on deactivate if possible", false)
+	cmdActivate := clap.Bool('a', "activate", false, "Set backend to active state", false)
+	cmdDeactivate := clap.Bool('d', "deactivate", false, "Set backend to maintenance state", false)
+	cmdAdd := clap.Bool(0, "add", false, "Create new endpoint", false)
+	cmdRemove := clap.Bool('r', "remove", false, "Remove existing endpoint", false)
+	cmdEditHost := clap.String(0, "edit-host", "", "Update specified host", false)
+	cmdEditLocation := clap.String(0, "edit-location", "", "Update specified endpoint location", false)
+	cmdAddressAdd := clap.String(0, "address-add", "", "Add specified endpoint IP address", false)
+	cmdAddressRemove := clap.String(0, "address-remove", "", "Remove specified endpoint IP address", false)
+	cmdEditTarget := clap.String(0, "edit-target", "", "Update specified upstream URL", false)
+	cmdHost := clap.String(0, "host", "*", "Host address for backend", false)
+	cmdLocation := clap.String('l', "location", "", "Specify endpoint location", false)
+	cmdAddress := clap.String(0, "address", "-", "Specify endpoint IP address", false)
+	cmdTarget := clap.String(0, "target", "", "Endpoint target address", false)
+	cmdFilter := clap.String('f', "filter", "", "Filter output by host names when listing endpoints", false)
+	cmdAclList := clap.Bool(0, "acl-list", false, "List whitelisted networks", false)
+	cmdAclAdd := clap.String(0, "acl-add", "", "Add cidr to the acl whitelist", false)
+	cmdAclRemove := clap.String(0, "acl-remove", "", "Remove cidr from the acl whitelist", false)
+	cmdClear := clap.Bool(0, "clear", false, "Clear hits statistics", false)
+	cmdShutdown := clap.Bool(0, "shutdown", false, "Shutdown current dsproxy instance", false)
+	rpcSocket := clap.String(
+		0,
+		"rpc-socket",
+		"/tmp/dsproxy.sock",
+		"Unix domain socket for RPC communication [default /tmp/dsproxy.sock]",
+		false,
+	)
+	clap.Parse()
 
 	/* handle cmd commands */
 	var reply int
