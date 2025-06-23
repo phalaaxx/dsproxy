@@ -1230,7 +1230,7 @@ func main() {
 		"Unix domain socket for RPC communication [default /tmp/dsproxy.sock]",
 		false,
 	)
-	clap.Parse()
+	clap.Parse(false)
 
 	/* handle cmd commands */
 	var reply int

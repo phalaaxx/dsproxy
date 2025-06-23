@@ -1,22 +1,42 @@
+/*
+BSD 2-Clause License
+
+# Copyright (c) 2025, Bozhin Zafirov
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+ 1. Redistributions of source code must retain the above copyright notice, this
+    list of conditions and the following disclaimer.
+
+ 2. Redistributions in binary form must reproduce the above copyright notice,
+    this list of conditions and the following disclaimer in the documentation
+    and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*/
 package clap
 
 import (
 	"flag"
 	"fmt"
 	"os"
+	"path"
 	"strings"
-)
-
-/* module constants */
-const (
-	argString = iota
-	argInt
-	argBool
 )
 
 /* argumentHelp stores command line arguments info */
 type argumentHelp struct {
-	ArgType   int
+	HasValue  bool
 	ArgLen    int
 	ShortName rune
 	LongName  string
@@ -44,7 +64,7 @@ func (a argumentHelp) String(isTerminal bool, maxLen int) (result string) {
 
 	optLen := func(maxLen int) (oLen int) {
 		oLen = maxLen - a.ArgLen + 2
-		if a.ArgType == argBool {
+		if !a.HasValue {
 			oLen += 3
 		}
 		return
@@ -72,7 +92,7 @@ func (a argumentHelp) String(isTerminal bool, maxLen int) (result string) {
 			)
 		}
 	}
-	if a.ArgType == argString || a.ArgType == argInt {
+	if a.HasValue {
 		if len(a.LongName) != 0 {
 			optionStr = fmt.Sprintf("%s <%s>", optionStr, strings.ToUpper(a.LongName))
 		}
@@ -86,63 +106,6 @@ func (a argumentHelp) String(isTerminal bool, maxLen int) (result string) {
 	)
 	fmt.Printf("%s\n", optionStr)
 	return
-	/* generate color format */
-	terminalFmt := func(maxLen int) (result string) {
-		switch a.ArgType {
-		case argString, argInt:
-			result = fmt.Sprintf(
-				"  \033[01;38m-%%s, --%%s\033[00m <%%s>%s%%s\n",
-				strings.Repeat(" ", maxLen-a.ArgLen+4),
-			)
-		case argBool:
-			result = fmt.Sprintf(
-				"  \033[01;38m-%%s, --%%s\033[00m%s%%s\n",
-				strings.Repeat(" ", maxLen-a.ArgLen+7),
-			)
-		}
-		return
-	}
-	/* generate non-color format */
-	nonTerminalFmt := func(maxLen int) (result string) {
-		switch a.ArgType {
-		case argString, argInt:
-			result = fmt.Sprintf(
-				"  -%%s, --%%s <%%s>%s%%s\n",
-				strings.Repeat(" ", maxLen-a.ArgLen+4),
-			)
-		case argBool:
-			result = fmt.Sprintf(
-				"  -%%s, --%%s%s%%s\n",
-				strings.Repeat(" ", maxLen-a.ArgLen+7),
-			)
-		}
-		return
-	}
-	/* return result */
-	var fmtStr string
-	if isTerminal {
-		fmtStr = terminalFmt(maxLen)
-	} else {
-		fmtStr = nonTerminalFmt(maxLen)
-	}
-	switch a.ArgType {
-	case argString, argInt:
-		result = fmt.Sprintf(
-			fmtStr,
-			a.ShortName,
-			a.LongName,
-			strings.ToUpper(a.LongName),
-			a.HelpText,
-		)
-	case argBool:
-		result = fmt.Sprintf(
-			fmtStr,
-			a.ShortName,
-			a.LongName,
-			a.HelpText,
-		)
-	}
-	return
 }
 
 /* global variables */
@@ -151,76 +114,103 @@ var (
 	isTerminal bool
 )
 
-/* String command line option */
-func String(shortName rune, longName string, defaultValue string, helpText string, required bool) *string {
-	result := new(string)
+/* genericAddVar is a wrapper around flag functions to add command line arguments */
+func genericAddVar[T any](data *T, name string, initial T, usage string) {
+	switch any(*data).(type) {
+	case int:
+		flag.IntVar(any(data).(*int), name, any(initial).(int), usage)
+	case int64:
+		flag.Int64Var(any(data).(*int64), name, any(initial).(int64), usage)
+	case float64:
+		flag.Float64Var(any(data).(*float64), name, any(initial).(float64), usage)
+	case string:
+		flag.StringVar(any(data).(*string), name, any(initial).(string), usage)
+	case uint:
+		flag.UintVar(any(data).(*uint), name, any(initial).(uint), usage)
+	case uint64:
+		flag.Uint64Var(any(data).(*uint64), name, any(initial).(uint64), usage)
+	case bool:
+		flag.BoolVar(any(data).(*bool), name, any(initial).(bool), usage)
+	}
+}
+
+/* genericVar defines a T flag in the argument result */
+func genericVar[T any](result *T, short rune, long string, value T, usage string, required bool) {
+	/* add generic options */
+	if short != 0 {
+		genericAddVar[T](result, string(short), value, usage)
+	}
+	if len(long) != 0 {
+		genericAddVar[T](result, long, value, usage)
+	}
+	_, isBool := any(value).(bool)
+	/* calculate options length multiplier */
+	multiplier := 1
+	if !isBool {
+		multiplier = 2
+	}
+	/* update help data */
+	argHelp = append(
+		argHelp,
+		argumentHelp{
+			HasValue:  !isBool,
+			ArgLen:    4 + multiplier*len(long),
+			ShortName: short,
+			LongName:  long,
+			HelpText:  usage,
+			Required:  required,
+			Value:     value,
+		},
+	)
+}
+
+/* generic defines a T flag and returns a pointer to it */
+func generic[T any](short rune, long string, value T, usage string, required bool) *T {
+	result := new(T)
+	genericVar[T](result, short, long, value, usage, required)
+	return result
+}
+
+/* define global clap functions */
+var (
+	/* define functions assigning pointer to a flag */
+	StringVar  = genericVar[string]
+	IntVar     = genericVar[int]
+	Int64Var   = genericVar[int64]
+	Float64Var = genericVar[float64]
+	UintVar    = genericVar[uint]
+	Uint64Var  = genericVar[uint64]
+	BoolVar    = genericVar[bool]
+	/* define functions returning pointer to a flag */
+	String  = generic[string]
+	Int     = generic[int]
+	Int64   = generic[int64]
+	Float64 = generic[float64]
+	Uint    = generic[uint]
+	Uint64  = generic[uint64]
+	Bool    = generic[bool]
+)
+
+/* Var is a special-case function / wrapper around flag.Var for custom data type flags */
+func Var(value flag.Value, shortName rune, longName string, helpText string, required bool) {
 	if shortName != 0 {
-		flag.StringVar(result, string(shortName), defaultValue, helpText)
+		flag.Var(value, string(shortName), helpText)
 	}
 	if len(longName) != 0 {
-		flag.StringVar(result, longName, defaultValue, helpText)
+		flag.Var(value, longName, helpText)
 	}
 	argHelp = append(
 		argHelp,
 		argumentHelp{
-			ArgType:   argString,
+			HasValue:  true,
 			ArgLen:    4 + 2*len(longName),
 			ShortName: shortName,
 			LongName:  longName,
 			HelpText:  helpText,
 			Required:  required,
-			Value:     result,
+			Value:     value,
 		},
 	)
-	return result
-}
-
-/* Int command line option */
-func Int(shortName rune, longName string, defaultValue int, helpText string, required bool) *int {
-	result := new(int)
-	if shortName != 0 {
-		flag.IntVar(result, string(shortName), defaultValue, helpText)
-	}
-	if len(longName) != 0 {
-		flag.IntVar(result, longName, defaultValue, helpText)
-	}
-	argHelp = append(
-		argHelp,
-		argumentHelp{
-			ArgType:   argInt,
-			ArgLen:    4 + 2*len(longName),
-			ShortName: shortName,
-			LongName:  longName,
-			HelpText:  helpText,
-			Required:  required,
-			Value:     result,
-		},
-	)
-	return result
-}
-
-/* Bool command line option */
-func Bool(shortName rune, longName string, defaultValue bool, helpText string, required bool) *bool {
-	result := new(bool)
-	if shortName != 0 {
-		flag.BoolVar(result, string(shortName), defaultValue, helpText)
-	}
-	if len(longName) != 0 {
-		flag.BoolVar(result, longName, defaultValue, helpText)
-	}
-	argHelp = append(
-		argHelp,
-		argumentHelp{
-			ArgType:   argBool,
-			ArgLen:    4 + len(longName),
-			ShortName: shortName,
-			LongName:  longName,
-			HelpText:  helpText,
-			Required:  required,
-			Value:     result,
-		},
-	)
-	return result
 }
 
 /* errorHelp renders error message when required arguments are missing */
@@ -233,7 +223,7 @@ func errorHelp(isTerminal bool) string {
 	/* add arguments to error message */
 	for _, arg := range argHelp {
 		if arg.Required {
-			argStr := "  \033[02;32m--%s <%s>\033[00m\n"
+			argStr := "  \033[00;32m--%s <%s>\033[00m\n"
 			if !isTerminal {
 				argStr = "  --%s <%s>\n"
 			}
@@ -261,7 +251,7 @@ func errorHelp(isTerminal bool) string {
 			"%s %s",
 			fmt.Sprintf(
 				usageHelp,
-				os.Args[0],
+				path.Base(os.Args[0]),
 			),
 			fmt.Sprintf(
 				argHelp,
@@ -308,26 +298,51 @@ func usageHeader(isTerminal bool) string {
 	}
 	return fmt.Sprintf(
 		"%s\n\n%s",
-		fmt.Sprintf(header, os.Args[0]),
+		fmt.Sprintf(header, path.Base(os.Args[0])),
 		optHdr,
 	)
 }
 
+/* ErrNoArg prints error and exits when no arguments are provided while at least one is required */
+func ErrNoArg() {
+	if isTerminal {
+		fmt.Printf(
+			"\033[01;31merror:\033[00m no arguments are provided\n\n" +
+				"For more information, try '\033[01;38m--help\033[00m'.\n",
+		)
+	} else {
+		fmt.Printf(
+			"error: no arguments are provided\n\n" +
+				"For more information, try '--help'.",
+		)
+	}
+	os.Exit(-1)
+}
+
 /* Parse is a wrapper around flag.Parse function */
-func Parse() {
-	flag.Parse()
-	/* check if required arguments are provided */
-	for _, arg := range argHelp {
-		/* do not check non-mandatory arguments */
-		if !arg.Required {
-			continue
+func Parse(required bool) {
+	/* argCheck returns true if specified option is provided as a command line argument */
+	argCheck := func(arg string) bool {
+		for _, opt := range os.Args {
+			if arg == opt {
+				return true
+			}
 		}
-		/* do not check bool arguments */
-		if arg.ArgType == argBool {
+		return false
+	}
+	/* print error on empty arguments list when at least one argument is required */
+	if required && len(os.Args) == 1 {
+		ErrNoArg()
+	}
+	/* parse and check if required arguments are provided */
+	flag.Parse()
+	for _, arg := range argHelp {
+		/* do not check non-mandatory and bool arguments */
+		if !arg.Required || !arg.HasValue {
 			continue
 		}
 		/* make sure value is provided */
-		if len(*arg.Value.(*string)) == 0 {
+		if !argCheck("--"+arg.LongName) && (arg.ShortName == 0 || !argCheck("-"+string(arg.ShortName))) {
 			fmt.Printf(errorHelp(isTerminal))
 			os.Exit(-1)
 		}
