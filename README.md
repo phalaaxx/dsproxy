@@ -14,6 +14,8 @@ provided, it is used when initiating backend connection regardless of how target
 Endpoints support multiple ip:port address pairs that are used sequentially, which in effect results in a round-robin load balancing
 support.
 
+*dsproxy* also supports serving static files when target is set to point to a valid directory on the local filesystem.
+
 ### Compilation
 
 To compile the binary simply run:

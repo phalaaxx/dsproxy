@@ -36,6 +36,7 @@ import (
 	"dsproxy/clap"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"golang.org/x/sys/unix"
 	"html/template"
@@ -47,6 +48,7 @@ import (
 	"net/netip"
 	"net/rpc"
 	"os"
+	"path"
 	"slices"
 	"strconv"
 	"strings"
@@ -57,6 +59,14 @@ import (
 
 //go:embed static/*
 var static embed.FS
+
+/* isDir returns true if specified target is a local directory */
+func isDir(target string) bool {
+	if stat, err := os.Stat(target); err == nil && stat.IsDir() {
+		return true
+	}
+	return false
+}
 
 /* MutexTransaction runs a callback function in a mutex lock */
 func MutexTransaction(mu sync.RWMutex, readWrite bool, callback func(args ...interface{}) error, args ...interface{}) error {
@@ -288,6 +298,7 @@ type Backend struct {
 	AddrList BackendAddrList `json:"addrlist"`
 	Counter  MutexUInt64     `json:"counter"`
 	Active   bool            `json:"active"`
+	Static   bool            `json:"static"`
 	Headers  http.Header     `json:"headers"`
 }
 
@@ -464,6 +475,7 @@ func (b *BackendData) SetTarget(host string, location string, newTarget string) 
 		for idx := 0; idx < len(b.Backend[host]); idx++ {
 			if b.Backend[host][idx].Location == location {
 				b.Backend[host][idx].Target = newTarget
+				b.Backend[host][idx].Static = isDir(newTarget)
 				return nil
 			}
 		}
@@ -517,6 +529,7 @@ func (b *BackendData) Add(host string, location string, address string, target s
 			Location: location,
 			Target:   target,
 			Active:   true,
+			Static:   isDir(target),
 		}
 		if len(address) != 0 {
 			backend.AddrList.Update(address, true)
@@ -576,7 +589,9 @@ func (b *BackendData) SetActive(host string, location string, active bool, autoC
 /* HandleProxyRequest performs proxy operation */
 func HandleProxyRequestGenerator(timeout time.Duration, static embed.FS, maintenanceFile string, endPoint *BackendData) http.HandlerFunc {
 	/* initialize global templates */
+	tplForbidden := loadTemplate(static, "static/403.html")
 	tplNotFound := loadTemplate(static, "static/404.html")
+	tplInternalError := loadTemplate(static, "static/500.html")
 	tplUnavailable := loadTemplate(static, "static/503.html")
 	tplMaintenance := tplUnavailable
 	/* load custom maintenance page if provided */
@@ -653,6 +668,50 @@ func HandleProxyRequestGenerator(timeout time.Duration, static embed.FS, mainten
 			}
 
 			endpoint.Counter.Increase()
+
+			/* handle static content */
+			if endpoint.Static {
+				/* calculate static path */
+				relativePath := strings.TrimPrefix(r.URL.Path, fmt.Sprintf("/%s", endpoint.Location))
+				absolutePath := path.Join(endpoint.Target, relativePath)
+				if isDir(absolutePath) {
+					absolutePath = path.Join(absolutePath, "index.html")
+				}
+				/* open file for reading and handle common errors */
+				fh, err := os.Open(absolutePath)
+				if err != nil {
+					switch {
+					case errors.Is(err, os.ErrNotExist):
+						/* resource was not found */
+						if err := RenderStatus(w, http.StatusNotFound, tplNotFound, relativePath); err != nil {
+							log.Println(err)
+						}
+					case errors.Is(err, os.ErrPermission):
+						/* access to resource was forbidden */
+						if err := RenderStatus(w, http.StatusForbidden, tplForbidden, relativePath); err != nil {
+							log.Println(err)
+						}
+					}
+					return err
+				}
+				defer fh.Close()
+				/* get file stats to provide correct modification time */
+				stat, err := fh.Stat()
+				if err != nil {
+					if err := RenderStatus(
+						w,
+						http.StatusInternalServerError,
+						tplInternalError,
+						relativePath,
+					); err != nil {
+						log.Println(err)
+					}
+					return err
+				}
+				/* serve static content and exit */
+				http.ServeContent(w, r, relativePath, stat.ModTime(), fh)
+				return nil
+			}
 
 			/* make a client and request objects */
 			target := fmt.Sprintf(
