@@ -42,11 +42,14 @@ import (
 	"io"
 	"log"
 	"math"
+	"mime"
 	"net"
 	"net/http"
 	"net/netip"
 	"net/rpc"
 	"os"
+	"path"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -57,6 +60,14 @@ import (
 
 //go:embed static/*
 var static embed.FS
+
+/* isDir returns true if specified target is a local directory */
+func isDir(target string) bool {
+	if stat, err := os.Stat(target); err == nil && stat.IsDir() {
+		return true
+	}
+	return false
+}
 
 /* MutexTransaction runs a callback function in a mutex lock */
 func MutexTransaction(mu sync.RWMutex, readWrite bool, callback func(args ...interface{}) error, args ...interface{}) error {
@@ -288,6 +299,7 @@ type Backend struct {
 	AddrList BackendAddrList `json:"addrlist"`
 	Counter  MutexUInt64     `json:"counter"`
 	Active   bool            `json:"active"`
+	Static   bool            `json:"static"`
 	Headers  http.Header     `json:"headers"`
 }
 
@@ -464,6 +476,7 @@ func (b *BackendData) SetTarget(host string, location string, newTarget string) 
 		for idx := 0; idx < len(b.Backend[host]); idx++ {
 			if b.Backend[host][idx].Location == location {
 				b.Backend[host][idx].Target = newTarget
+				b.Backend[host][idx].Static = isDir(newTarget)
 				return nil
 			}
 		}
@@ -517,6 +530,7 @@ func (b *BackendData) Add(host string, location string, address string, target s
 			Location: location,
 			Target:   target,
 			Active:   true,
+			Static:   isDir(target),
 		}
 		if len(address) != 0 {
 			backend.AddrList.Update(address, true)
@@ -653,6 +667,43 @@ func HandleProxyRequestGenerator(timeout time.Duration, static embed.FS, mainten
 			}
 
 			endpoint.Counter.Increase()
+
+			/* handle static content */
+			if endpoint.Static {
+				/* calculate static path */
+				relativePath := strings.TrimPrefix(r.URL.Path, fmt.Sprintf("/%s", endpoint.Location))
+				absolutePath := path.Join(endpoint.Target, relativePath)
+				if isDir(absolutePath) {
+					absolutePath = path.Join(absolutePath, "index.html")
+				}
+				/* open static file */
+				fh, err := os.Open(absolutePath)
+				if err != nil {
+					if err := RenderStatus(w, http.StatusNotFound, tplNotFound, relativePath); err != nil {
+						log.Println(err)
+					}
+					return err
+				}
+				defer fh.Close()
+				/* read static file stats */
+				stat, err := fh.Stat()
+				if err != nil {
+					if err := RenderStatus(w, http.StatusInternalServerError, tplNotFound, relativePath); err != nil {
+						log.Println(err)
+					}
+					return err
+				}
+				/* render headers */
+				w.Header().Set("content-length", strconv.FormatInt(stat.Size(), 10))
+				w.Header().Set("content-type", mime.TypeByExtension(filepath.Ext(absolutePath)))
+				w.WriteHeader(http.StatusOK)
+				/* send file contents */
+				if _, err := io.Copy(w, fh); err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return err
+				}
+				return nil
+			}
 
 			/* make a client and request objects */
 			target := fmt.Sprintf(
